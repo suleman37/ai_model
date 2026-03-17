@@ -21,8 +21,10 @@ RUN pip install -r /tmp/requirements.txt
 
 COPY docker ${APP_HOME}/docker
 COPY FASTAPI ${APP_HOME}/FASTAPI
+COPY start.sh ${APP_HOME}/start.sh
 
-RUN mkdir -p /tmp \
+RUN chmod +x ${APP_HOME}/start.sh \
+    && mkdir -p /tmp \
     && chown -R appuser:appuser ${APP_HOME} /tmp /home/appuser
 
 USER appuser
@@ -32,4 +34,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD ["sh", "-c", "python /app/docker/healthcheck.py http://127.0.0.1:${PORT:-8000}/health"]
 
-CMD ["sh", "-c", "uvicorn FASTAPI.app:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["/app/start.sh"]
