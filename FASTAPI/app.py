@@ -11,10 +11,11 @@ import logging
 import os
 
 # ==================== CONFIGURATION ====================
-MODEL_PATH = "best.pt"  # Model in current folder
-PIXELS_PER_CM = 100
-CONFIDENCE_THRESHOLD = 0.25
-MASK_THRESHOLD = 0.5
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(BASE_DIR, "best.pt"))
+PIXELS_PER_CM = float(os.getenv("PIXELS_PER_CM", "100"))
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.25"))
+MASK_THRESHOLD = float(os.getenv("MASK_THRESHOLD", "0.5"))
 
 # ==================== LOGGING ====================
 logging.basicConfig(level=logging.INFO)
@@ -344,4 +345,4 @@ async def predict_dual(imageLeft: UploadFile = File(...), imageRight: UploadFile
 # ==================== RUN SERVER ====================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

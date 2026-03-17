@@ -24,11 +24,13 @@ from ultralytics import YOLO
 import logging
 
 # ==================== CONFIGURATION ====================
-MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "best.pt")
-PIXELS_PER_CM = 100
-IMAGE_SIZE = 256
-CONFIDENCE_THRESHOLD = 0.25
-MASK_THRESHOLD = 0.5
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(PROJECT_ROOT, "FASTAPI", "best.pt"))
+PIXELS_PER_CM = float(os.getenv("PIXELS_PER_CM", "100"))
+IMAGE_SIZE = int(os.getenv("IMAGE_SIZE", "256"))
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.25"))
+MASK_THRESHOLD = float(os.getenv("MASK_THRESHOLD", "0.5"))
 
 # ==================== LOGGING ====================
 logging.basicConfig(level=logging.INFO)
@@ -440,4 +442,4 @@ async def delete_session(session_id: str):
 # ==================== RUN SERVER ====================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8001")))

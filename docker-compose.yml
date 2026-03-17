@@ -1,0 +1,51 @@
+services:
+  simple-ear-segmentation:
+    build:
+      context: .
+      dockerfile: Dockerfile.simple
+    image: ai-ear/simple-ear-segmentation:local
+    container_name: simple-ear-segmentation
+    environment:
+      PORT: 8000
+      MODEL_PATH: /app/FASTAPI/best.pt
+      PIXELS_PER_CM: 100
+      CONFIDENCE_THRESHOLD: 0.25
+      MASK_THRESHOLD: 0.5
+    healthcheck:
+      test: ["CMD", "python", "/app/docker/healthcheck.py", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    init: true
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    tmpfs:
+      - /tmp
+
+  advanced-ear-landmarks:
+    build:
+      context: .
+      dockerfile: Dockerfile.advanced
+    image: ai-ear/advanced-ear-landmarks:local
+    container_name: advanced-ear-landmarks
+    environment:
+      PORT: 8001
+      MODEL_PATH: /app/FASTAPI/best.pt
+      PIXELS_PER_CM: 100
+      IMAGE_SIZE: 256
+      CONFIDENCE_THRESHOLD: 0.25
+      MASK_THRESHOLD: 0.5
+    healthcheck:
+      test: ["CMD", "python", "/app/docker/healthcheck.py", "http://127.0.0.1:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    init: true
+    ports:
+      - "8001:8001"
+    restart: unless-stopped
+    tmpfs:
+      - /tmp
