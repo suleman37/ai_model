@@ -4,6 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=1000 \
     APP_HOME=/app \
     MODEL_PATH=/app/FASTAPI/best.pt \
     PORT=8000
@@ -17,7 +18,8 @@ RUN apt-get update \
     && useradd --system --gid appuser --create-home --home-dir /home/appuser appuser
 
 COPY FASTAPI/requirements.txt /tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt
+RUN pip install --upgrade pip \
+    && pip install --retries 10 -r /tmp/requirements.txt
 
 COPY docker ${APP_HOME}/docker
 COPY FASTAPI ${APP_HOME}/FASTAPI

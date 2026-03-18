@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: ai-ear/unified-api:local
+    pull_policy: never
     container_name: ai-ear-unified-api
     environment:
       PORT: 8000
