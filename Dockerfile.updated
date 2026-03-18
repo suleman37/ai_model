@@ -1,0 +1,36 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    APP_HOME=/app \
+    MODEL_PATH=/app/FASTAPI/best.pt \
+    PORT=8002
+
+WORKDIR ${APP_HOME}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system appuser \
+    && useradd --system --gid appuser --create-home --home-dir /home/appuser appuser
+
+COPY API_updated/API/requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt
+
+COPY docker ${APP_HOME}/docker
+COPY FASTAPI ${APP_HOME}/FASTAPI
+COPY API_updated ${APP_HOME}/API_updated
+
+RUN mkdir -p /tmp \
+    && chown -R appuser:appuser ${APP_HOME} /tmp /home/appuser
+
+USER appuser
+
+EXPOSE 8002
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD ["sh", "-c", "python /app/docker/healthcheck.py http://127.0.0.1:${PORT:-8002}/health"]
+
+CMD ["sh", "-c", "uvicorn API_updated.API.app:app --host 0.0.0.0 --port ${PORT:-8002}"]
