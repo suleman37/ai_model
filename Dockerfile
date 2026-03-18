@@ -21,6 +21,9 @@ RUN pip install -r /tmp/requirements.txt
 
 COPY docker ${APP_HOME}/docker
 COPY FASTAPI ${APP_HOME}/FASTAPI
+COPY fastapi_module_2 ${APP_HOME}/fastapi_module_2
+COPY API_updated ${APP_HOME}/API_updated
+COPY main.py ${APP_HOME}/main.py
 COPY start.sh ${APP_HOME}/start.sh
 
 RUN chmod +x ${APP_HOME}/start.sh \
