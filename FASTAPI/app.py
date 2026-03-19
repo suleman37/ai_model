@@ -1,14 +1,30 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-import numpy as np
-import cv2
-from PIL import Image
 import io
 import base64
-from ultralytics import YOLO
 import logging
 import os
+
+try:
+    import numpy as np
+except ModuleNotFoundError:
+    np = None
+
+try:
+    import cv2
+except ModuleNotFoundError:
+    cv2 = None
+
+try:
+    from PIL import Image
+except ModuleNotFoundError:
+    Image = None
+
+try:
+    from ultralytics import YOLO
+except ModuleNotFoundError:
+    YOLO = None
 
 # ==================== CONFIGURATION ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -20,6 +36,25 @@ MASK_THRESHOLD = float(os.getenv("MASK_THRESHOLD", "0.5"))
 # ==================== LOGGING ====================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def ensure_runtime_dependencies() -> None:
+    missing = []
+    if np is None:
+        missing.append("numpy")
+    if cv2 is None:
+        missing.append("opencv-python")
+    if Image is None:
+        missing.append("pillow")
+    if YOLO is None:
+        missing.append("ultralytics")
+
+    if missing:
+        raise RuntimeError(
+            "Missing runtime dependencies: "
+            + ", ".join(missing)
+            + ". Install them in the active virtualenv to use inference endpoints."
+        )
 
 # ==================== FASTAPI APP ====================
 app = FastAPI(
@@ -41,6 +76,7 @@ app.add_middleware(
 def load_model_on_startup():
     global model
     try:
+        ensure_runtime_dependencies()
         model = YOLO(MODEL_PATH)
         logger.info(f"✓ Model loaded successfully from {MODEL_PATH}")
     except Exception as e:
@@ -54,6 +90,7 @@ load_model_on_startup()
 
 def image_to_base64(image_array):
     """Convert numpy array to base64 string"""
+    ensure_runtime_dependencies()
     pil_image = Image.fromarray(image_array)
     buffered = io.BytesIO()
     pil_image.save(buffered, format="PNG")
@@ -66,6 +103,8 @@ def process_ear_segmentation(image_array, confidence=CONFIDENCE_THRESHOLD):
     Process ear segmentation and extract measurements
     Returns: (measurements, images)
     """
+    ensure_runtime_dependencies()
+
     if model is None:
         raise Exception("Model not loaded")
     
@@ -189,6 +228,11 @@ async def predict(file: UploadFile = File(...), confidence: float = CONFIDENCE_T
     - 3 visualizations: segmentation result, segmented ear, mask visualization
     """
     
+    try:
+        ensure_runtime_dependencies()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
     if model is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
     
@@ -231,6 +275,11 @@ async def predict_simple(file: UploadFile = File(...)):
     - 3 output images
     """
     
+    try:
+        ensure_runtime_dependencies()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
     if model is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
     
@@ -277,6 +326,11 @@ async def predict_dual(imageLeft: UploadFile = File(...), imageRight: UploadFile
     - 3 output images for each ear (6 total)
     """
     
+    try:
+        ensure_runtime_dependencies()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
     if model is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
     

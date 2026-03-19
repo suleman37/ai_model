@@ -13,15 +13,31 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Tuple
-import numpy as np
-import cv2
-from PIL import Image
 import io
 import base64
 import tempfile
 import os
-from ultralytics import YOLO
 import logging
+
+try:
+    import numpy as np
+except ModuleNotFoundError:
+    np = None
+
+try:
+    import cv2
+except ModuleNotFoundError:
+    cv2 = None
+
+try:
+    from PIL import Image
+except ModuleNotFoundError:
+    Image = None
+
+try:
+    from ultralytics import YOLO
+except ModuleNotFoundError:
+    YOLO = None
 
 # ==================== CONFIGURATION ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +51,25 @@ MASK_THRESHOLD = float(os.getenv("MASK_THRESHOLD", "0.5"))
 # ==================== LOGGING ====================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def ensure_runtime_dependencies() -> None:
+    missing = []
+    if np is None:
+        missing.append("numpy")
+    if cv2 is None:
+        missing.append("opencv-python")
+    if Image is None:
+        missing.append("pillow")
+    if YOLO is None:
+        missing.append("ultralytics")
+
+    if missing:
+        raise RuntimeError(
+            "Missing runtime dependencies: "
+            + ", ".join(missing)
+            + ". Install them in the active virtualenv to use inference endpoints."
+        )
 
 # ==================== FASTAPI APP ====================
 app = FastAPI(
@@ -59,6 +94,7 @@ model = None
 def load_model_on_startup():
     global model
     try:
+        ensure_runtime_dependencies()
         model = YOLO(MODEL_PATH)
         logger.info(f"✓ Model loaded successfully from {MODEL_PATH}")
     except Exception as e:
@@ -89,6 +125,7 @@ class MirrorAndMeasureRequest(BaseModel):
 
 def image_to_base64(image_array):
     """Convert numpy array (BGR) to base64 PNG string"""
+    ensure_runtime_dependencies()
     # Convert BGR to RGB for PIL
     if len(image_array.shape) == 3 and image_array.shape[2] == 3:
         rgb = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
@@ -102,6 +139,7 @@ def image_to_base64(image_array):
 
 def center_ear(image, mask):
     """Center the ear in the image using the mask centroid"""
+    ensure_runtime_dependencies()
     h, w = mask.shape
 
     coords = np.column_stack(np.where(mask > 0))
@@ -124,6 +162,8 @@ def segment_and_normalize(image_array):
     Segment the ear from an image array and normalize it.
     Returns the normalized ear image (256x256) as a numpy array.
     """
+    ensure_runtime_dependencies()
+
     if model is None:
         raise Exception("Model not loaded")
 
@@ -270,6 +310,11 @@ async def segment_ears(
       - right_ear_image: base64 PNG of the normalized right ear (for landmark clicking)
       - left_ear_image: base64 PNG of the normalized left ear (preview)
     """
+    try:
+        ensure_runtime_dependencies()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
     if model is None:
         raise HTTPException(status_code=500, detail="Model not loaded")
 
@@ -339,6 +384,11 @@ async def mirror_and_measure(request: MirrorAndMeasureRequest):
       - left_ear_points: mirrored points
       - distances: list of distances between consecutive points (pixels & cm)
     """
+    try:
+        ensure_runtime_dependencies()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
     session_id = request.session_id
 
     if session_id not in sessions:
