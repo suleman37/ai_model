@@ -1,6 +1,7 @@
 import os
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 
 from FASTAPI import app as fastapi_module
@@ -46,6 +47,14 @@ app = FastAPI(
     ],
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=False,
+)
+
 
 def include_prefixed_routes(source_app: FastAPI, prefix: str, tag: str) -> None:
     for route in source_app.routes:
@@ -72,6 +81,16 @@ for module in MODULES:
     include_prefixed_routes(module["app"], module["prefix"], module["tag"])
 
 
+def get_module_status(module: dict) -> dict:
+    module_ref = module["module"]
+    return {
+        "prefix": module["prefix"],
+        "model_loaded": getattr(module_ref, "model", None) is not None,
+        "loaded_model_path": getattr(module_ref, "loaded_model_path", None),
+        "model_error": getattr(module_ref, "model_load_error", None),
+    }
+
+
 @app.get("/", tags=["FASTAPI"])
 async def root():
     return {
@@ -81,8 +100,7 @@ async def root():
         "modules": [
             {
                 "name": module["tag"],
-                "prefix": module["prefix"],
-                "model_loaded": getattr(module["module"], "model", None) is not None,
+                **get_module_status(module),
             }
             for module in MODULES
         ],
@@ -94,10 +112,7 @@ async def health():
     return {
         "status": "healthy",
         "modules": {
-            module["tag"]: {
-                "prefix": module["prefix"],
-                "model_loaded": getattr(module["module"], "model", None) is not None,
-            }
+            module["tag"]: get_module_status(module)
             for module in MODULES
         },
     }
@@ -106,4 +121,4 @@ async def health():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8001")))

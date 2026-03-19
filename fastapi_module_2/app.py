@@ -82,27 +82,90 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=False,
 )
 
 # ==================== LOAD MODEL ====================
 model = None
+model_load_error = None
+loaded_model_path = None
+
+
+def get_model_candidates() -> List[str]:
+    candidates = []
+    env_model_path = os.getenv("MODEL_PATH")
+
+    if env_model_path:
+        candidates.append(env_model_path)
+        if not os.path.isabs(env_model_path):
+            candidates.append(os.path.join(BASE_DIR, env_model_path))
+            candidates.append(os.path.join(PROJECT_ROOT, env_model_path))
+
+    candidates.extend(
+        [
+            os.path.join(PROJECT_ROOT, "FASTAPI", "best.pt"),
+            os.path.join(BASE_DIR, "best.pt"),
+            os.path.join(PROJECT_ROOT, "best.pt"),
+        ]
+    )
+
+    normalized_candidates = []
+    seen = set()
+    for candidate in candidates:
+        normalized = os.path.abspath(candidate)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_candidates.append(normalized)
+
+    return normalized_candidates
 
 
 def load_model_on_startup():
-    global model
+    global model, model_load_error, loaded_model_path
     try:
         ensure_runtime_dependencies()
-        model = YOLO(MODEL_PATH)
-        logger.info(f"✓ Model loaded successfully from {MODEL_PATH}")
+        available_candidates = get_model_candidates()
+        existing_candidates = [path for path in available_candidates if os.path.isfile(path)]
+
+        if not existing_candidates:
+            raise FileNotFoundError(
+                "No model file found. Checked: " + ", ".join(available_candidates)
+            )
+
+        load_errors = []
+        for candidate in existing_candidates:
+            try:
+                model = YOLO(candidate)
+                loaded_model_path = candidate
+                model_load_error = None
+                logger.info(f"✓ Model loaded successfully from {candidate}")
+                return
+            except Exception as candidate_error:
+                load_errors.append(f"{candidate}: {candidate_error}")
+
+        raise RuntimeError(
+            "Failed to load model from available files. Errors: " + " | ".join(load_errors)
+        )
     except Exception as e:
         logger.error(f"✗ Failed to load model: {str(e)}")
         model = None
+        loaded_model_path = None
+        model_load_error = str(e)
 
 
 load_model_on_startup()
+
+
+def ensure_model_loaded() -> None:
+    if model is None:
+        load_model_on_startup()
+
+    if model is None:
+        detail = model_load_error or "Model not loaded"
+        raise HTTPException(status_code=500, detail=detail)
 
 
 # ==================== PYDANTIC MODELS ====================
@@ -163,9 +226,7 @@ def segment_and_normalize(image_array):
     Returns the normalized ear image (256x256) as a numpy array.
     """
     ensure_runtime_dependencies()
-
-    if model is None:
-        raise Exception("Model not loaded")
+    ensure_model_loaded()
 
     # Save to temp file for YOLO prediction
     tmp_path = None
@@ -277,6 +338,8 @@ async def root():
         "message": "Ear Landmark Mapping API (Module 2)",
         "status": "running",
         "model_loaded": model is not None,
+        "loaded_model_path": loaded_model_path,
+        "model_error": model_load_error,
         "endpoints": {
             "health": "/health",
             "segment": "/segment (POST) - Upload right & left ear images",
@@ -291,7 +354,10 @@ async def health():
     return {
         "status": "healthy",
         "model_loaded": model is not None,
-        "model_path": MODEL_PATH,
+        "configured_model_path": MODEL_PATH,
+        "loaded_model_path": loaded_model_path,
+        "available_model_paths": get_model_candidates(),
+        "model_error": model_load_error,
         "image_size": IMAGE_SIZE,
         "pixels_per_cm": PIXELS_PER_CM,
     }
@@ -315,8 +381,7 @@ async def segment_ears(
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
-    if model is None:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+    ensure_model_loaded()
 
     try:
         # Read right ear

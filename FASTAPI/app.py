@@ -1,10 +1,11 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import io
 import base64
 import logging
 import os
+from typing import List
 
 try:
     import numpy as np
@@ -28,6 +29,7 @@ except ModuleNotFoundError:
 
 # ==================== CONFIGURATION ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
 MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(BASE_DIR, "best.pt"))
 PIXELS_PER_CM = float(os.getenv("PIXELS_PER_CM", "100"))
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.25"))
@@ -67,24 +69,88 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=False,
 )
 
 # ==================== LOAD MODEL ====================
+def get_model_candidates() -> List[str]:
+    candidates = []
+    env_model_path = os.getenv("MODEL_PATH")
+
+    if env_model_path:
+        candidates.append(env_model_path)
+        if not os.path.isabs(env_model_path):
+            candidates.append(os.path.join(BASE_DIR, env_model_path))
+            candidates.append(os.path.join(PROJECT_ROOT, env_model_path))
+
+    candidates.extend(
+        [
+            os.path.join(BASE_DIR, "best.pt"),
+            os.path.join(PROJECT_ROOT, "FASTAPI", "best.pt"),
+            os.path.join(PROJECT_ROOT, "best.pt"),
+        ]
+    )
+
+    normalized_candidates = []
+    seen = set()
+    for candidate in candidates:
+        normalized = os.path.abspath(candidate)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_candidates.append(normalized)
+
+    return normalized_candidates
+
+
 def load_model_on_startup():
-    global model
+    global model, model_load_error, loaded_model_path
     try:
         ensure_runtime_dependencies()
-        model = YOLO(MODEL_PATH)
-        logger.info(f"✓ Model loaded successfully from {MODEL_PATH}")
+
+        available_candidates = get_model_candidates()
+        existing_candidates = [path for path in available_candidates if os.path.isfile(path)]
+
+        if not existing_candidates:
+            raise FileNotFoundError(
+                "No model file found. Checked: " + ", ".join(available_candidates)
+            )
+
+        load_errors = []
+        for candidate in existing_candidates:
+            try:
+                model = YOLO(candidate)
+                loaded_model_path = candidate
+                model_load_error = None
+                logger.info(f"✓ Model loaded successfully from {candidate}")
+                return
+            except Exception as candidate_error:
+                load_errors.append(f"{candidate}: {candidate_error}")
+
+        raise RuntimeError(
+            "Failed to load model from available files. Errors: " + " | ".join(load_errors)
+        )
     except Exception as e:
         logger.error(f"✗ Failed to load model: {str(e)}")
         model = None
+        loaded_model_path = None
+        model_load_error = str(e)
 
 model = None
+model_load_error = None
+loaded_model_path = None
 load_model_on_startup()
+
+
+def ensure_model_loaded() -> None:
+    if model is None:
+        load_model_on_startup()
+
+    if model is None:
+        detail = model_load_error or "Model not loaded"
+        raise HTTPException(status_code=500, detail=detail)
 
 # ==================== UTILITY FUNCTIONS ====================
 
@@ -199,10 +265,14 @@ async def root():
         "message": "Ear Segmentation API",
         "status": "running",
         "model_loaded": model is not None,
+        "loaded_model_path": loaded_model_path,
+        "model_error": model_load_error,
         "endpoints": {
             "health": "/health",
             "predict_full": "/predict",
-            "predict_simple": "/predict-simple"
+            "predict_simple": "/predict-simple",
+            "predict_dual": "/predict-dual",
+            "demo": "/demo",
         }
     }
 
@@ -213,9 +283,18 @@ async def health():
     return {
         "status": "healthy",
         "model_loaded": model is not None,
-        "model_path": MODEL_PATH,
+        "configured_model_path": MODEL_PATH,
+        "loaded_model_path": loaded_model_path,
+        "available_model_paths": get_model_candidates(),
+        "model_error": model_load_error,
         "pixels_per_cm": PIXELS_PER_CM
     }
+
+
+@app.get("/demo")
+async def demo():
+    """Serve the bundled frontend demo."""
+    return FileResponse(os.path.join(BASE_DIR, "index.html"))
 
 
 @app.post("/predict")
@@ -233,8 +312,7 @@ async def predict(file: UploadFile = File(...), confidence: float = CONFIDENCE_T
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
-    if model is None:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+    ensure_model_loaded()
     
     try:
         contents = await file.read()
@@ -280,8 +358,7 @@ async def predict_simple(file: UploadFile = File(...)):
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
-    if model is None:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+    ensure_model_loaded()
     
     try:
         contents = await file.read()
@@ -331,8 +408,7 @@ async def predict_dual(imageLeft: UploadFile = File(...), imageRight: UploadFile
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
-    if model is None:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+    ensure_model_loaded()
     
     try:
         # Process LEFT image
@@ -399,4 +475,4 @@ async def predict_dual(imageLeft: UploadFile = File(...), imageRight: UploadFile
 # ==================== RUN SERVER ====================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8001")))

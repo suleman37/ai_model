@@ -290,6 +290,7 @@
 
                 <div class="button-section">
                     <button id="submitBtn" onclick="submitImage()">📤 Analyze Single Ear</button>
+                    <button id="submitFullBtn" onclick="submitFullImage()">📊 Full Analysis</button>
                 </div>
             </div>
 
@@ -315,6 +316,7 @@
 
             <div class="button-section" style="border-top: 2px solid #ddd; padding-top: 20px;">
                 <button id="resetBtn" onclick="resetForm()" style="background: #95a5a6;">🔄 Reset All</button>
+            </div>
 
             <div class="error" id="errorMsg"></div>
             <div class="success" id="successMsg"></div>
@@ -336,10 +338,74 @@
     </div>
 
     <script>
-        const API_URL = "http://localhost:8000";
+        const API_HOST_CANDIDATES = [];
+        if (window.location.protocol === "http:" || window.location.protocol === "https:") {
+            API_HOST_CANDIDATES.push(window.location.origin);
+        }
+        API_HOST_CANDIDATES.push("http://localhost:8001");
+        API_HOST_CANDIDATES.push("http://127.0.0.1:8001");
+
+        const API_PREFIX_CANDIDATES = ["", "/fastapi"];
+        let apiBaseUrl = null;
         let selectedFile = null;
         let selectedLeftFile = null;
         let selectedRightFile = null;
+
+        async function resolveApiBase() {
+            if (apiBaseUrl) {
+                return apiBaseUrl;
+            }
+
+            const uniqueHosts = [...new Set(API_HOST_CANDIDATES)];
+            for (const host of uniqueHosts) {
+                for (const prefix of API_PREFIX_CANDIDATES) {
+                    const candidate = `${host}${prefix}`;
+                    try {
+                        const response = await fetch(`${candidate}/health`);
+                        if (!response.ok) {
+                            continue;
+                        }
+
+                        const health = await response.json();
+                        const isDirectFastApi = typeof health.model_loaded === "boolean";
+                        const isUnifiedFastApi = Boolean(health.modules && health.modules.FASTAPI);
+
+                        if (isDirectFastApi) {
+                            apiBaseUrl = candidate;
+                            return apiBaseUrl;
+                        }
+
+                        if (isUnifiedFastApi) {
+                            apiBaseUrl = `${host}/fastapi`;
+                            return apiBaseUrl;
+                        }
+                    } catch (error) {
+                        console.warn(`Health check failed for ${candidate}`, error);
+                    }
+                }
+            }
+
+            throw new Error("Cannot connect to FastAPI server on http://localhost:8001");
+        }
+
+        async function apiFetch(path, options) {
+            const baseUrl = await resolveApiBase();
+            const response = await fetch(`${baseUrl}${path}`, options);
+            let data = null;
+
+            try {
+                data = await response.json();
+            } catch (error) {
+                data = null;
+            }
+
+            if (!response.ok) {
+                const detail = data && data.detail ? data.detail : `Request failed with status ${response.status}`;
+                throw new Error(detail);
+            }
+
+            return data;
+        }
 
         // Single image file input
         document.getElementById("imageInput").addEventListener("change", function(e) {
@@ -385,19 +451,42 @@
                 hideError();
                 hideSuccess();
 
-                const response = await fetch(`${API_URL}/predict-simple`, {
+                const result = await apiFetch("/predict-simple", {
+                    method: "POST",
+                    body: formData
+                });
+                displayResults(result);
+                showSuccess("Image analyzed successfully! ✓");
+
+            } catch (error) {
+                showError(`Error: ${error.message}`);
+                console.error("Error:", error);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function submitFullImage() {
+            if (!selectedFile) {
+                showError("Please select an image first");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append("file", selectedFile);
+
+            try {
+                showLoading(true);
+                hideError();
+                hideSuccess();
+
+                const result = await apiFetch("/predict", {
                     method: "POST",
                     body: formData
                 });
 
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || "API error");
-                }
-
-                const result = await response.json();
-                displayResults(result);
-                showSuccess("Image analyzed successfully! ✓");
+                displayFullResults(result);
+                showSuccess("Full analysis completed successfully! ✓");
 
             } catch (error) {
                 showError(`Error: ${error.message}`);
@@ -422,17 +511,10 @@
                 hideError();
                 hideSuccess();
 
-                const response = await fetch(`${API_URL}/predict-dual`, {
+                const result = await apiFetch("/predict-dual", {
                     method: "POST",
                     body: formData
                 });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || "API error");
-                }
-
-                const result = await response.json();
                 displayDualResults(result);
                 showSuccess("Both ears analyzed successfully! ✓");
 
@@ -571,6 +653,52 @@
             document.getElementById("results").style.display = "block";
         }
 
+        function displayFullResults(data) {
+            const measurements = data.data.measurements;
+            const measurementItems = [
+                ["Height (Vertical)", `${measurements.ear_height_px} px | ${measurements.ear_height_cm} cm`],
+                ["Width (Horizontal)", `${measurements.ear_width_px} px | ${measurements.ear_width_cm} cm`],
+                ["Area", `${measurements.area_px2} px² | ${measurements.area_cm2} cm²`],
+                ["Perimeter", `${measurements.perimeter_px} px | ${measurements.perimeter_cm} cm`],
+                ["Aspect Ratio", `${measurements.aspect_ratio}`],
+                ["Major Axis", `${measurements.major_axis_px} px | ${measurements.major_axis_cm} cm`],
+                ["Minor Axis", `${measurements.minor_axis_px} px | ${measurements.minor_axis_cm} cm`]
+            ];
+
+            const measurementsHtml = `
+                <h3>📏 Full Measurements</h3>
+                ${measurementItems.map(([label, value]) => `
+                    <div class="measurement-item">
+                        <span class="measurement-label">${label}</span>
+                        <span class="measurement-values">${value}</span>
+                    </div>
+                `).join("")}
+            `;
+            document.getElementById("measurements").innerHTML = measurementsHtml;
+
+            const images = data.data.images;
+            const imagesHtml = `
+                <h3>🖼️ Segmentation Results (3 Outputs)</h3>
+                <div class="images-grid">
+                    <div class="image-container">
+                        <div class="image-title">Segmentation Result</div>
+                        <img src="data:image/png;base64,${images.segmentation_result}" alt="Segmentation Result">
+                    </div>
+                    <div class="image-container">
+                        <div class="image-title">Segmented Ear</div>
+                        <img src="data:image/png;base64,${images.segmented_ear}" alt="Segmented Ear">
+                    </div>
+                    <div class="image-container">
+                        <div class="image-title">Mask Visualization</div>
+                        <img src="data:image/png;base64,${images.mask_visualization}" alt="Mask Visualization">
+                    </div>
+                </div>
+            `;
+            document.getElementById("imagesSection").innerHTML = imagesHtml;
+            document.getElementById("jsonResponse").textContent = JSON.stringify(data, null, 2);
+            document.getElementById("results").style.display = "block";
+        }
+
         function showError(message) {
             const errorDiv = document.getElementById("errorMsg");
             errorDiv.textContent = message;
@@ -597,6 +725,8 @@
         function showLoading(show) {
             document.getElementById("loading").style.display = show ? "block" : "none";
             document.getElementById("submitBtn").disabled = show;
+            document.getElementById("submitFullBtn").disabled = show;
+            document.getElementById("submitDualBtn").disabled = show;
         }
 
         function resetForm() {
@@ -620,14 +750,22 @@
         // Health check on page load
         window.addEventListener("load", async function() {
             try {
-                const response = await fetch(`${API_URL}/health`);
-                if (response.ok) {
-                    console.log("✓ API is running");
+                const baseUrl = await resolveApiBase();
+                const health = await apiFetch("/health", { method: "GET" });
+                const directModelLoaded = typeof health.model_loaded === "boolean" ? health.model_loaded : null;
+                const unifiedModelLoaded = health.modules && health.modules.FASTAPI
+                    ? health.modules.FASTAPI.model_loaded
+                    : null;
+                const modelLoaded = directModelLoaded !== null ? directModelLoaded : unifiedModelLoaded;
+
+                if (modelLoaded === false) {
+                    const modelError = health.model_error || "Model failed to load on server startup.";
+                    showError(`⚠️ API connected at ${baseUrl}, but model is not loaded: ${modelError}`);
                 } else {
-                    showError("⚠️ API is not responding. Make sure the server is running: python app.py");
+                    console.log(`✓ API is running at ${baseUrl}`);
                 }
             } catch (error) {
-                showError("⚠️ Cannot connect to API. Make sure the server is running: python app.py");
+                showError("⚠️ Cannot connect to API. Run either `python FASTAPI/app.py` or `python main.py`.");
             }
         });
     </script>
