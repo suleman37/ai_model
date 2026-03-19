@@ -850,7 +850,15 @@
 
     <script>
         // ==================== CONFIG ====================
-        const API_URL = "http://localhost:8001";
+        const API_HOST_CANDIDATES = [];
+        if (window.location.protocol === "http:" || window.location.protocol === "https:") {
+            API_HOST_CANDIDATES.push(window.location.origin);
+        }
+        API_HOST_CANDIDATES.push("http://localhost:8001");
+        API_HOST_CANDIDATES.push("http://127.0.0.1:8001");
+
+        const API_PREFIX_CANDIDATES = ["", "/fast_module_2"];
+        let apiBaseUrl = null;
 
         // ==================== STATE ====================
         let rightFile = null;
@@ -863,6 +871,43 @@
         const IMAGE_SIZE = 256;
         const CANVAS_SCALE = 2; // render canvas at 2x for retina
         const DISPLAY_SIZE = 384; // display size on screen
+
+        async function resolveApiBase() {
+            if (apiBaseUrl) {
+                return apiBaseUrl;
+            }
+
+            const uniqueHosts = [...new Set(API_HOST_CANDIDATES)];
+            for (const host of uniqueHosts) {
+                for (const prefix of API_PREFIX_CANDIDATES) {
+                    const candidate = `${host}${prefix}`;
+                    try {
+                        const response = await fetch(`${candidate}/health`);
+                        if (!response.ok) {
+                            continue;
+                        }
+
+                        const health = await response.json();
+                        const isDirectModule = typeof health.model_loaded === "boolean" && !health.modules;
+                        const isUnifiedModule = Boolean(health.modules && health.modules.fast_module_2);
+
+                        if (isDirectModule) {
+                            apiBaseUrl = candidate;
+                            return apiBaseUrl;
+                        }
+
+                        if (isUnifiedModule) {
+                            apiBaseUrl = `${host}/fast_module_2`;
+                            return apiBaseUrl;
+                        }
+                    } catch (error) {
+                        console.warn(`Health check failed for ${candidate}`, error);
+                    }
+                }
+            }
+
+            throw new Error("Cannot connect to Module 2 API on http://localhost:8001");
+        }
 
         // ==================== FILE INPUTS ====================
         document.getElementById("rightEarInput").addEventListener("change", (e) => {
@@ -900,8 +945,9 @@
 
             try {
                 showLoading("Segmenting and normalizing ears...");
+                const apiUrl = await resolveApiBase();
 
-                const resp = await fetch(`${API_URL}/segment`, {
+                const resp = await fetch(`${apiUrl}/segment`, {
                     method: "POST",
                     body: formData,
                 });
@@ -1059,8 +1105,9 @@
 
             try {
                 showLoading("Mirroring landmarks and calculating distances...");
+                const apiUrl = await resolveApiBase();
 
-                const resp = await fetch(`${API_URL}/mirror-and-measure`, {
+                const resp = await fetch(`${apiUrl}/mirror-and-measure`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload),
@@ -1228,14 +1275,15 @@
         // ==================== HEALTH CHECK ====================
         window.addEventListener("load", async () => {
             try {
-                const resp = await fetch(`${API_URL}/health`);
+                const apiUrl = await resolveApiBase();
+                const resp = await fetch(`${apiUrl}/health`);
                 if (resp.ok) {
                     console.log("✓ Module 2 API is running");
                 } else {
-                    showToast("⚠️ API not responding. Start server: python fastapi_module_2/app.py", "error");
+                    showToast("⚠️ API not responding on port 8001", "error");
                 }
             } catch {
-                showToast("⚠️ Cannot connect to API. Run: python fastapi_module_2/app.py", "error");
+                showToast("⚠️ Cannot connect to API on port 8001", "error");
             }
         });
     </script>
