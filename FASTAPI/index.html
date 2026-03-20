@@ -338,12 +338,8 @@
     </div>
 
     <script>
-        const API_HOST_CANDIDATES = [];
-        if (window.location.protocol === "http:" || window.location.protocol === "https:") {
-            API_HOST_CANDIDATES.push(window.location.origin);
-        }
-        API_HOST_CANDIDATES.push("http://localhost:8001");
-        API_HOST_CANDIDATES.push("http://127.0.0.1:8001");
+        const CONFIGURED_API_HOST = "http://159.89.141.9:8000";
+        const API_HOST_CANDIDATES = [CONFIGURED_API_HOST];
 
         const API_PREFIX_CANDIDATES = ["", "/fastapi"];
         let apiBaseUrl = null;
@@ -385,7 +381,7 @@
                 }
             }
 
-            throw new Error("Cannot connect to FastAPI server on http://localhost:8001");
+            throw new Error(`Cannot connect to FastAPI server on ${CONFIGURED_API_HOST}`);
         }
 
         async function apiFetch(path, options) {
@@ -765,7 +761,7 @@
                     console.log(`✓ API is running at ${baseUrl}`);
                 }
             } catch (error) {
-                showError("⚠️ Cannot connect to API. Run either `python FASTAPI/app.py` or `python main.py`.");
+                showError(`⚠️ Cannot connect to API at ${CONFIGURED_API_HOST}.`);
             }
         });
     </script>

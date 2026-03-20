@@ -850,12 +850,8 @@
 
     <script>
         // ==================== CONFIG ====================
-        const API_HOST_CANDIDATES = [];
-        if (window.location.protocol === "http:" || window.location.protocol === "https:") {
-            API_HOST_CANDIDATES.push(window.location.origin);
-        }
-        API_HOST_CANDIDATES.push("http://localhost:8001");
-        API_HOST_CANDIDATES.push("http://127.0.0.1:8001");
+        const CONFIGURED_API_HOST = "http://159.89.141.9:8000";
+        const API_HOST_CANDIDATES = [CONFIGURED_API_HOST];
 
         const API_PREFIX_CANDIDATES = ["", "/fast_module_2"];
         let apiBaseUrl = null;
@@ -906,7 +902,7 @@
                 }
             }
 
-            throw new Error("Cannot connect to Module 2 API on http://localhost:8001");
+            throw new Error(`Cannot connect to Module 2 API on ${CONFIGURED_API_HOST}`);
         }
 
         // ==================== FILE INPUTS ====================
@@ -1280,10 +1276,10 @@
                 if (resp.ok) {
                     console.log("✓ Module 2 API is running");
                 } else {
-                    showToast("⚠️ API not responding on port 8001", "error");
+                    showToast(`⚠️ API not responding at ${CONFIGURED_API_HOST}`, "error");
                 }
             } catch {
-                showToast("⚠️ Cannot connect to API on port 8001", "error");
+                showToast(`⚠️ Cannot connect to API at ${CONFIGURED_API_HOST}`, "error");
             }
         });
     </script>
