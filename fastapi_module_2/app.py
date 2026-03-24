@@ -8,68 +8,35 @@
 #   4. Distances between consecutive landmarks are calculated
 # ==========================================================
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import List, Tuple
+from typing import Any, Dict, List
+import numpy as np
+import cv2
+from PIL import Image
 import io
 import base64
 import tempfile
 import os
+import uuid
+from ultralytics import YOLO
 import logging
 
-try:
-    import numpy as np
-except ModuleNotFoundError:
-    np = None
-
-try:
-    import cv2
-except ModuleNotFoundError:
-    cv2 = None
-
-try:
-    from PIL import Image
-except ModuleNotFoundError:
-    Image = None
-
-try:
-    from ultralytics import YOLO
-except ModuleNotFoundError:
-    YOLO = None
 
 # ==================== CONFIGURATION ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(BASE_DIR)
-MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(PROJECT_ROOT, "FASTAPI", "best.pt"))
-PIXELS_PER_CM = float(os.getenv("PIXELS_PER_CM", "100"))
-IMAGE_SIZE = int(os.getenv("IMAGE_SIZE", "256"))
-CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.25"))
-MASK_THRESHOLD = float(os.getenv("MASK_THRESHOLD", "0.5"))
+MODEL_PATH = os.path.join(os.path.dirname(BASE_DIR), "best.pt")
+PIXELS_PER_CM = 100
+IMAGE_SIZE = 256
+CONFIDENCE_THRESHOLD = 0.25
+MASK_THRESHOLD = 0.5
 
 # ==================== LOGGING ====================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def ensure_runtime_dependencies() -> None:
-    missing = []
-    if np is None:
-        missing.append("numpy")
-    if cv2 is None:
-        missing.append("opencv-python")
-    if Image is None:
-        missing.append("pillow")
-    if YOLO is None:
-        missing.append("ultralytics")
-
-    if missing:
-        raise RuntimeError(
-            "Missing runtime dependencies: "
-            + ", ".join(missing)
-            + ". Install them in the active virtualenv to use inference endpoints."
-        )
 
 # ==================== FASTAPI APP ====================
 app = FastAPI(
@@ -82,90 +49,26 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=False,
 )
 
 # ==================== LOAD MODEL ====================
 model = None
-model_load_error = None
-loaded_model_path = None
-
-
-def get_model_candidates() -> List[str]:
-    candidates = []
-    env_model_path = os.getenv("MODEL_PATH")
-
-    if env_model_path:
-        candidates.append(env_model_path)
-        if not os.path.isabs(env_model_path):
-            candidates.append(os.path.join(BASE_DIR, env_model_path))
-            candidates.append(os.path.join(PROJECT_ROOT, env_model_path))
-
-    candidates.extend(
-        [
-            os.path.join(PROJECT_ROOT, "FASTAPI", "best.pt"),
-            os.path.join(BASE_DIR, "best.pt"),
-            os.path.join(PROJECT_ROOT, "best.pt"),
-        ]
-    )
-
-    normalized_candidates = []
-    seen = set()
-    for candidate in candidates:
-        normalized = os.path.abspath(candidate)
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        normalized_candidates.append(normalized)
-
-    return normalized_candidates
 
 
 def load_model_on_startup():
-    global model, model_load_error, loaded_model_path
+    global model
     try:
-        ensure_runtime_dependencies()
-        available_candidates = get_model_candidates()
-        existing_candidates = [path for path in available_candidates if os.path.isfile(path)]
-
-        if not existing_candidates:
-            raise FileNotFoundError(
-                "No model file found. Checked: " + ", ".join(available_candidates)
-            )
-
-        load_errors = []
-        for candidate in existing_candidates:
-            try:
-                model = YOLO(candidate)
-                loaded_model_path = candidate
-                model_load_error = None
-                logger.info(f"✓ Model loaded successfully from {candidate}")
-                return
-            except Exception as candidate_error:
-                load_errors.append(f"{candidate}: {candidate_error}")
-
-        raise RuntimeError(
-            "Failed to load model from available files. Errors: " + " | ".join(load_errors)
-        )
+        model = YOLO(MODEL_PATH)
+        logger.info(f"✓ Model loaded successfully from {MODEL_PATH}")
     except Exception as e:
         logger.error(f"✗ Failed to load model: {str(e)}")
         model = None
-        loaded_model_path = None
-        model_load_error = str(e)
 
 
 load_model_on_startup()
-
-
-def ensure_model_loaded() -> None:
-    if model is None:
-        load_model_on_startup()
-
-    if model is None:
-        detail = model_load_error or "Model not loaded"
-        raise HTTPException(status_code=500, detail=detail)
 
 
 # ==================== PYDANTIC MODELS ====================
@@ -186,9 +89,14 @@ class MirrorAndMeasureRequest(BaseModel):
 # ==================== UTILITY FUNCTIONS ====================
 
 
+def _round_float(value: float, ndigits: int) -> float:
+    """Round a float to ndigits decimal places. Avoids Pyre2 round() false positives."""
+    multiplier = 10 ** ndigits
+    return float(int(value * multiplier + 0.5)) / multiplier
+
+
 def image_to_base64(image_array):
     """Convert numpy array (BGR) to base64 PNG string"""
-    ensure_runtime_dependencies()
     # Convert BGR to RGB for PIL
     if len(image_array.shape) == 3 and image_array.shape[2] == 3:
         rgb = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
@@ -202,7 +110,6 @@ def image_to_base64(image_array):
 
 def center_ear(image, mask):
     """Center the ear in the image using the mask centroid"""
-    ensure_runtime_dependencies()
     h, w = mask.shape
 
     coords = np.column_stack(np.where(mask > 0))
@@ -225,8 +132,8 @@ def segment_and_normalize(image_array):
     Segment the ear from an image array and normalize it.
     Returns the normalized ear image (256x256) as a numpy array.
     """
-    ensure_runtime_dependencies()
-    ensure_model_loaded()
+    if model is None:
+        raise Exception("Model not loaded")
 
     # Save to temp file for YOLO prediction
     tmp_path = None
@@ -252,11 +159,12 @@ def segment_and_normalize(image_array):
         interpolation=cv2.INTER_NEAREST,
     )
 
-    # Segment ear (black background)
+    # Segment ear (keep natural background)
     segmented = image_array.copy()
-    segmented[mask == 0] = 0
+    # segmented[mask == 0] = 0
 
-    # Crop ear using mask bounding box
+    # Crop a square region around the ear to preserve aspect ratio,
+    # centered on the ear's center of mass (centroid) for anatomical alignment
     coords = np.column_stack(np.where(mask > 0))
     if len(coords) == 0:
         raise ValueError("No valid mask pixels found")
@@ -264,20 +172,45 @@ def segment_and_normalize(image_array):
     y_min, x_min = coords.min(axis=0)
     y_max, x_max = coords.max(axis=0)
 
-    cropped = segmented[y_min:y_max, x_min:x_max]
-    cropped_mask = mask[y_min:y_max, x_min:x_max]
+    # Calculate center of mass
+    cy, cx = coords.mean(axis=0)
+    center_y = int(cy)
+    center_x = int(cx)
+
+    # Ensure the square is large enough to contain the whole ear when centered on the centroid
+    dist_y = max(abs(y_max - center_y), abs(center_y - y_min))
+    dist_x = max(abs(x_max - center_x), abs(center_x - x_min))
+    max_dim = int(max(dist_y, dist_x) * 2)
+    
+    # Add a small padding (15% to be safe)
+    max_dim = int(max_dim * 1.15)
+    
+    half_dim = max_dim // 2
+
+    x1, y1 = center_x - half_dim, center_y - half_dim
+    x2, y2 = center_x + (max_dim - half_dim), center_y + (max_dim - half_dim)
+
+    img_h, img_w = segmented.shape[:2]
+    safe_x1, safe_y1 = max(0, x1), max(0, y1)
+    safe_x2, safe_y2 = min(img_w, x2), min(img_h, y2)
+
+    cropped_square = segmented[safe_y1:safe_y2, safe_x1:safe_x2]
+    mask_square = mask[safe_y1:safe_y2, safe_x1:safe_x2]
+
+    pad_top, pad_bottom = max(0, -y1), max(0, y2 - img_h)
+    pad_left, pad_right = max(0, -x1), max(0, x2 - img_w)
+
+    if pad_top > 0 or pad_bottom > 0 or pad_left > 0 or pad_right > 0:
+        cropped_square = cv2.copyMakeBorder(cropped_square, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_REPLICATE)
+        mask_square = cv2.copyMakeBorder(mask_square, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=0)
 
     # Normalize to IMAGE_SIZE x IMAGE_SIZE
     normalized = cv2.resize(
-        cropped, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_LINEAR
+        cropped_square, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_LINEAR
     )
-    mask_resized = cv2.resize(
-        cropped_mask, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_NEAREST
-    )
+    # mask_resized = cv2.resize(mask_square, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_NEAREST)
 
-    # Center ear
-    normalized = center_ear(normalized, mask_resized)
-
+    # Return the perfectly square, undistorted image directly without center_ear shifting
     return normalized
 
 
@@ -323,9 +256,11 @@ def draw_landmarks_with_lines(image, points, color=(0, 0, 255), text_color=(0, 2
     return img
 
 
+
+
 # ==================== IN-MEMORY SESSION STORE ====================
 # Stores normalized ear images per session for the two-step workflow
-sessions = {}
+sessions: Dict[str, Any] = {}
 
 
 # ==================== API ENDPOINTS ====================
@@ -338,8 +273,6 @@ async def root():
         "message": "Ear Landmark Mapping API (Module 2)",
         "status": "running",
         "model_loaded": model is not None,
-        "loaded_model_path": loaded_model_path,
-        "model_error": model_load_error,
         "endpoints": {
             "health": "/health",
             "segment": "/segment (POST) - Upload right & left ear images",
@@ -354,10 +287,7 @@ async def health():
     return {
         "status": "healthy",
         "model_loaded": model is not None,
-        "configured_model_path": MODEL_PATH,
-        "loaded_model_path": loaded_model_path,
-        "available_model_paths": get_model_candidates(),
-        "model_error": model_load_error,
+        "model_path": MODEL_PATH,
         "image_size": IMAGE_SIZE,
         "pixels_per_cm": PIXELS_PER_CM,
     }
@@ -376,12 +306,8 @@ async def segment_ears(
       - right_ear_image: base64 PNG of the normalized right ear (for landmark clicking)
       - left_ear_image: base64 PNG of the normalized left ear (preview)
     """
-    try:
-        ensure_runtime_dependencies()
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-
-    ensure_model_loaded()
+    if model is None:
+        raise HTTPException(status_code=500, detail="Model not loaded")
 
     try:
         # Read right ear
@@ -403,7 +329,6 @@ async def segment_ears(
         left_normalized = segment_and_normalize(left_image)
 
         # Generate session ID
-        import uuid
         session_id = str(uuid.uuid4())
 
         # Store in memory
@@ -449,11 +374,6 @@ async def mirror_and_measure(request: MirrorAndMeasureRequest):
       - left_ear_points: mirrored points
       - distances: list of distances between consecutive points (pixels & cm)
     """
-    try:
-        ensure_runtime_dependencies()
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-
     session_id = request.session_id
 
     if session_id not in sessions:
@@ -469,18 +389,19 @@ async def mirror_and_measure(request: MirrorAndMeasureRequest):
     # Convert points
     right_points = [(p.x, p.y) for p in request.right_ear_points]
 
-    if len(right_points) < 2:
+    if len(right_points) < 1:
         raise HTTPException(
             status_code=400,
-            detail="At least 2 landmark points are required for distance calculation",
+            detail="At least 1 landmark point is required for mirroring",
         )
 
-    # Mirror points for left ear (horizontal flip)
+    # Mirror points: simple horizontal flip (256 - x), y stays the same
     left_points = []
     for x, y in right_points:
-        mirrored_x = (IMAGE_SIZE - 1) - int(x)
-        mirrored_y = int(y)
-        left_points.append((mirrored_x, mirrored_y))
+        mirrored_x = IMAGE_SIZE - x
+        mirrored_y = y
+
+        left_points.append((_round_float(float(mirrored_x), 1), _round_float(float(mirrored_y), 1)))
 
     # Draw landmarks on right ear
     right_ear_with_landmarks = draw_landmarks_with_lines(right_ear, right_points)
@@ -497,12 +418,15 @@ async def mirror_and_measure(request: MirrorAndMeasureRequest):
         pixel_distance = float(np.linalg.norm(p1 - p2))
         cm_distance = pixel_distance / PIXELS_PER_CM
 
+        dist_px_rounded = _round_float(pixel_distance, 3)
+        dist_cm_rounded = _round_float(cm_distance, 3)
+
         distances.append(
             {
                 "from_point": i + 1,
                 "to_point": i + 2,
-                "distance_pixels": round(pixel_distance, 3),
-                "distance_cm": round(cm_distance, 3),
+                "distance_pixels": float(dist_px_rounded),
+                "distance_cm": float(dist_cm_rounded),
             }
         )
 
@@ -512,6 +436,10 @@ async def mirror_and_measure(request: MirrorAndMeasureRequest):
 
     # Clean up session (optional - keeps memory usage low)
     # del sessions[session_id]
+
+    # Store points in session so /validate-frame (webcam) can use them
+    sessions[session_id]["right_points"] = right_points
+    sessions[session_id]["left_points"]  = left_points
 
     logger.info(
         f"Session {session_id}: {len(right_points)} landmarks processed, "
@@ -545,16 +473,194 @@ async def mirror_and_measure(request: MirrorAndMeasureRequest):
     )
 
 
+@app.get("/session/{session_id}")
+async def get_session(session_id: str):
+    """Get session status"""
+    if session_id in sessions:
+        return {"success": True, "session_id": session_id}
+    raise HTTPException(status_code=404, detail="Session not found")
+
+
 @app.delete("/session/{session_id}")
 async def delete_session(session_id: str):
     """Delete a session and free memory"""
     if session_id in sessions:
-        del sessions[session_id]
+        sessions.pop(session_id)
         return {"success": True, "message": f"Session {session_id} deleted"}
     raise HTTPException(status_code=404, detail="Session not found")
 
 
+# ==================== WEBCAM VALIDATION HELPERS ====================
+
+def detect_blue_markers(image):
+    """Return sorted list of (cx, cy) centres of blue dots in the ear image."""
+    hsv  = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    # Detect blue markers: H: 90-130, S: 50-255, V: 50-255
+    lower_blue = np.array([90, 50, 50])
+    upper_blue = np.array([130, 255, 255])
+    mask = cv2.inRange(hsv, lower_blue, upper_blue)
+    
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    pts = []
+    for c in cnts:
+        area = cv2.contourArea(c)
+        # Be very sensitive to small dots (area > 10 pixels)
+        if area > 10:
+            M = cv2.moments(c)
+            if M["m00"] != 0:
+                pts.append((int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])))
+    pts.sort(key=lambda p: p[1])   # top to bottom
+    return pts
+
+
+def get_point_guidance(digital, live, px_per_cm=PIXELS_PER_CM):
+    """Return (message, error_cm) comparing a live marker to a digital point."""
+    dx = digital[0] - live[0]   # +ve → live is left of target → move right
+    dy = digital[1] - live[1]   # +ve → live is above target  → move down
+    dist_px = float(np.hypot(dx, dy))
+    tol = 5                      # pixels considered "correct"
+    mm_pp = 10.0 / px_per_cm    # mm per pixel
+
+    if dist_px <= tol:
+        return "CORRECT ✓", _round_float(dist_px / px_per_cm, 3)
+
+    hdir = ""
+    vdir = ""
+    if   dx >  tol: hdir = f"RIGHT {abs(dx)*mm_pp:.1f}mm"
+    elif dx < -tol: hdir = f"LEFT  {abs(dx)*mm_pp:.1f}mm"
+    if   dy >  tol: vdir = f"DOWN  {abs(dy)*mm_pp:.1f}mm"
+    elif dy < -tol: vdir = f"UP    {abs(dy)*mm_pp:.1f}mm"
+
+    msg = " & ".join(filter(None, [hdir, vdir]))
+    return f"Move → {msg}", _round_float(dist_px / px_per_cm, 3)
+
+
+@app.post("/validate-frame")
+async def validate_frame(
+    file: UploadFile = File(...),
+    session_id: str  = Form(...),
+    ear_side: str    = Form("left"),
+):
+    """
+    Live webcam validation endpoint.
+    Accepts a single JPEG frame, normalises the ear with YOLO, detects
+    blue physical markers, compares each to the stored digital points,
+    and returns per-point guidance + an annotated image.
+    """
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = sessions[session_id]
+    if "right_points" not in session:
+        raise HTTPException(
+            status_code=400,
+            detail="No landmark points saved. Complete Mirror & Measure first."
+        )
+
+    digital_pts = session["left_points"] if ear_side == "left" else session["right_points"]
+
+    # Decode incoming frame
+    contents = await file.read()
+    nparr    = np.frombuffer(contents, np.uint8)
+    frame    = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(status_code=400, detail="Invalid image frame")
+
+    # Normalize ear
+    try:
+        ear = segment_and_normalize(frame)
+    except Exception:
+        ear = None
+
+    if ear is None:
+        return JSONResponse({"success": True, "ear_detected": False,
+                             "guidance": [], "annotated_image": None})
+
+    # Detect live blue markers
+    live_pts  = detect_blue_markers(ear)
+    annotated = ear.copy()
+
+    # Draw digital target points (black ring)
+    for i, dp in enumerate(digital_pts):
+        cv2.circle(annotated, (int(dp[0]), int(dp[1])), 7, (0, 0, 0), 2)
+        cv2.putText(annotated, str(i + 1),
+                    (int(dp[0]) + 8, int(dp[1]) - 7),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 120, 255), 1)
+
+    # Match each digital point to nearest un-used live marker
+    used    = set()
+    results: List[Dict[str, Any]] = []
+    for i, dp in enumerate(digital_pts):
+        best_d, best_j = 9999, -1
+        for j, lp in enumerate(live_pts):
+            if j in used: continue
+            d = np.hypot(lp[0] - dp[0], lp[1] - dp[1])
+            if d < best_d:
+                best_d, best_j = d, j
+
+        if best_j != -1 and best_d < IMAGE_SIZE * 0.4:
+            used.add(best_j)
+            matched_lp = live_pts[best_j]
+            msg, err_cm = get_point_guidance(dp, matched_lp)
+            correct = "CORRECT" in msg
+            color   = (0, 220, 80) if correct else (255, 120, 0) # Green if OK, Blue-ish if not
+
+            # Draw live physical marker (solid blue fill/white outline)
+            cv2.circle(annotated, (int(matched_lp[0]), int(matched_lp[1])), 6, (255, 50, 50), -1)
+            cv2.circle(annotated, (int(matched_lp[0]), int(matched_lp[1])), 6, (255, 255, 255), 1)
+            
+            # Arrow from live marker → digital target
+            cv2.arrowedLine(annotated,
+                            (int(matched_lp[0]), int(matched_lp[1])),
+                            (int(dp[0]), int(dp[1])),
+                            (0, 255, 0), 1, tipLength=0.3)
+            
+            # Short guidance on image
+            guidance_part = str(msg.split("\u2192")[-1])
+            short = "OK" if correct else guidance_part.strip()[:14]
+            cv2.putText(annotated, short,
+                        (int(matched_lp[0]) + 8, int(matched_lp[1]) + 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
+
+            results.append({
+                "point": i + 1, "message": msg,
+                "error_cm": err_cm, "correct": correct,
+                "live": [matched_lp[0], matched_lp[1]], "digital": [dp[0], dp[1]]
+            })
+        else:
+            results.append({
+                "point": i + 1, "message": "No marker detected",
+                "error_cm": None, "correct": False,
+                "live": None, "digital": [dp[0], dp[1]]
+            })
+
+    # Calculate overall improvement metric
+    valid_points = [r for r in results if r["error_cm"] is not None]
+    overall_accuracy = 0
+    if valid_points:
+        # 10mm (1cm) error = 0% accuracy, 0mm error = 100% accuracy
+        avg_err_mm = np.mean([r["error_cm"] * 10 for r in valid_points])
+        overall_accuracy = max(0, round(100 - (avg_err_mm * 10), 1)) 
+
+    return JSONResponse({
+        "success": True,
+        "ear_detected": True,
+        "ear_side": ear_side,
+        "guidance": results,
+        "summary": {
+            "overall_accuracy": overall_accuracy,
+            "detected_markers": len(used),
+            "total_points": len(digital_pts),
+            "status": "Excellent" if overall_accuracy > 90 else "Good" if overall_accuracy > 70 else "Needs Work"
+        },
+        "annotated_image": image_to_base64(annotated)
+    })
+
+
+# ==================== MOUNT UI ====================
+app.mount("/ui", StaticFiles(directory=BASE_DIR, html=True), name="ui")
+
 # ==================== RUN SERVER ====================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8001")))
+    uvicorn.run(app, host="0.0.0.0", port=8001)
