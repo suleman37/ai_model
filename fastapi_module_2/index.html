@@ -850,8 +850,14 @@
 
     <script>
         // ==================== CONFIG ====================
-        const CONFIGURED_API_HOST = "http://159.89.141.9:8000";
-        const API_HOST_CANDIDATES = [CONFIGURED_API_HOST];
+        const CONFIGURED_DOCS_URL = "http://0.0.0.0:8000/docs";
+        const CONFIGURED_API_HOST = new URL(CONFIGURED_DOCS_URL).origin;
+        const API_HOST_CANDIDATES = [
+            CONFIGURED_API_HOST,
+            window.location.origin,
+            "http://127.0.0.1:8000",
+            "http://localhost:8000",
+        ];
 
         const API_PREFIX_CANDIDATES = ["", "/fast_module_2"];
         let apiBaseUrl = null;
