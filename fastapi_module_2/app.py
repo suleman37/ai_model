@@ -14,30 +14,65 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Any, Dict, List
-import numpy as np
-import cv2
-from PIL import Image
 import io
 import base64
 import tempfile
 import os
 import uuid
-from ultralytics import YOLO
 import logging
+
+try:
+    import numpy as np
+except ModuleNotFoundError:
+    np = None
+
+try:
+    import cv2
+except ModuleNotFoundError:
+    cv2 = None
+
+try:
+    from PIL import Image
+except ModuleNotFoundError:
+    Image = None
+
+try:
+    from ultralytics import YOLO
+except ModuleNotFoundError:
+    YOLO = None
 
 
 # ==================== CONFIGURATION ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
-MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(BASE_DIR, "best.pt"))
-PIXELS_PER_CM = float(os.getenv("PIXELS_PER_CM", "100"))
+MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(PROJECT_ROOT, "FASTAPI", "best.pt"))
+PIXELS_PER_CM = 100
 IMAGE_SIZE = 256
-CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.25"))
-MASK_THRESHOLD = float(os.getenv("MASK_THRESHOLD", "0.5"))
+CONFIDENCE_THRESHOLD = 0.25
+MASK_THRESHOLD = 0.5
 
 # ==================== LOGGING ====================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def ensure_runtime_dependencies() -> None:
+    missing = []
+    if np is None:
+        missing.append("numpy")
+    if cv2 is None:
+        missing.append("opencv-python")
+    if Image is None:
+        missing.append("pillow")
+    if YOLO is None:
+        missing.append("ultralytics")
+
+    if missing:
+        raise RuntimeError(
+            "Missing runtime dependencies: "
+            + ", ".join(missing)
+            + ". Install them in the active virtualenv to use inference endpoints."
+        )
 
 # ==================== FASTAPI APP ====================
 app = FastAPI(
@@ -73,8 +108,8 @@ def get_model_candidates() -> List[str]:
 
     candidates.extend(
         [
-            os.path.join(BASE_DIR, "best.pt"),
             os.path.join(PROJECT_ROOT, "FASTAPI", "best.pt"),
+            os.path.join(BASE_DIR, "best.pt"),
             os.path.join(PROJECT_ROOT, "best.pt"),
         ]
     )
@@ -94,6 +129,7 @@ def get_model_candidates() -> List[str]:
 def load_model_on_startup():
     global model, model_load_error, loaded_model_path
     try:
+        ensure_runtime_dependencies()
         available_candidates = get_model_candidates()
         existing_candidates = [path for path in available_candidates if os.path.isfile(path)]
 
@@ -161,6 +197,7 @@ def _round_float(value: float, ndigits: int) -> float:
 
 def image_to_base64(image_array):
     """Convert numpy array (BGR) to base64 PNG string"""
+    ensure_runtime_dependencies()
     # Convert BGR to RGB for PIL
     if len(image_array.shape) == 3 and image_array.shape[2] == 3:
         rgb = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
@@ -174,6 +211,7 @@ def image_to_base64(image_array):
 
 def center_ear(image, mask):
     """Center the ear in the image using the mask centroid"""
+    ensure_runtime_dependencies()
     h, w = mask.shape
 
     coords = np.column_stack(np.where(mask > 0))
@@ -196,6 +234,7 @@ def segment_and_normalize(image_array):
     Segment the ear from an image array and normalize it.
     Returns the normalized ear image (256x256) as a numpy array.
     """
+    ensure_runtime_dependencies()
     ensure_model_loaded()
 
     # Save to temp file for YOLO prediction
@@ -336,6 +375,8 @@ async def root():
         "message": "Ear Landmark Mapping API (Module 2)",
         "status": "running",
         "model_loaded": model is not None,
+        "loaded_model_path": loaded_model_path,
+        "model_error": model_load_error,
         "endpoints": {
             "health": "/health",
             "segment": "/segment (POST) - Upload right & left ear images",
@@ -350,7 +391,9 @@ async def health():
     return {
         "status": "healthy",
         "model_loaded": model is not None,
-        "model_path": loaded_model_path or MODEL_PATH,
+        "configured_model_path": MODEL_PATH,
+        "loaded_model_path": loaded_model_path,
+        "available_model_paths": get_model_candidates(),
         "model_error": model_load_error,
         "image_size": IMAGE_SIZE,
         "pixels_per_cm": PIXELS_PER_CM,
