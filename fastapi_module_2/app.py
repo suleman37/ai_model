@@ -14,38 +14,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Any, Dict, List
+import numpy as np
+import cv2
+from PIL import Image
 import io
 import base64
 import tempfile
 import os
 import uuid
+from ultralytics import YOLO
 import logging
-
-try:
-    import numpy as np
-except ModuleNotFoundError:
-    np = None
-
-try:
-    import cv2
-except ModuleNotFoundError:
-    cv2 = None
-
-try:
-    from PIL import Image
-except ModuleNotFoundError:
-    Image = None
-
-try:
-    from ultralytics import YOLO
-except ModuleNotFoundError:
-    YOLO = None
 
 
 # ==================== CONFIGURATION ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(BASE_DIR)
-MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(PROJECT_ROOT, "FASTAPI", "best.pt"))
+MODEL_PATH = os.path.join(os.path.dirname(BASE_DIR), "best.pt")
 PIXELS_PER_CM = 100
 IMAGE_SIZE = 256
 CONFIDENCE_THRESHOLD = 0.25
@@ -54,25 +37,6 @@ MASK_THRESHOLD = 0.5
 # ==================== LOGGING ====================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def ensure_runtime_dependencies() -> None:
-    missing = []
-    if np is None:
-        missing.append("numpy")
-    if cv2 is None:
-        missing.append("opencv-python")
-    if Image is None:
-        missing.append("pillow")
-    if YOLO is None:
-        missing.append("ultralytics")
-
-    if missing:
-        raise RuntimeError(
-            "Missing runtime dependencies: "
-            + ", ".join(missing)
-            + ". Install them in the active virtualenv to use inference endpoints."
-        )
 
 # ==================== FASTAPI APP ====================
 app = FastAPI(
@@ -92,83 +56,19 @@ app.add_middleware(
 
 # ==================== LOAD MODEL ====================
 model = None
-model_load_error = None
-loaded_model_path = None
-
-
-def get_model_candidates() -> List[str]:
-    candidates = []
-    env_model_path = os.getenv("MODEL_PATH")
-
-    if env_model_path:
-        candidates.append(env_model_path)
-        if not os.path.isabs(env_model_path):
-            candidates.append(os.path.join(BASE_DIR, env_model_path))
-            candidates.append(os.path.join(PROJECT_ROOT, env_model_path))
-
-    candidates.extend(
-        [
-            os.path.join(PROJECT_ROOT, "FASTAPI", "best.pt"),
-            os.path.join(BASE_DIR, "best.pt"),
-            os.path.join(PROJECT_ROOT, "best.pt"),
-        ]
-    )
-
-    normalized_candidates = []
-    seen = set()
-    for candidate in candidates:
-        normalized = os.path.abspath(candidate)
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        normalized_candidates.append(normalized)
-
-    return normalized_candidates
 
 
 def load_model_on_startup():
-    global model, model_load_error, loaded_model_path
+    global model
     try:
-        ensure_runtime_dependencies()
-        available_candidates = get_model_candidates()
-        existing_candidates = [path for path in available_candidates if os.path.isfile(path)]
-
-        if not existing_candidates:
-            raise FileNotFoundError(
-                "No model file found. Checked: " + ", ".join(available_candidates)
-            )
-
-        load_errors = []
-        for candidate in existing_candidates:
-            try:
-                model = YOLO(candidate)
-                loaded_model_path = candidate
-                model_load_error = None
-                logger.info(f"✓ Model loaded successfully from {candidate}")
-                return
-            except Exception as candidate_error:
-                load_errors.append(f"{candidate}: {candidate_error}")
-
-        raise RuntimeError(
-            "Failed to load model from available files. Errors: " + " | ".join(load_errors)
-        )
+        model = YOLO(MODEL_PATH)
+        logger.info(f"✓ Model loaded successfully from {MODEL_PATH}")
     except Exception as e:
         logger.error(f"✗ Failed to load model: {str(e)}")
         model = None
-        loaded_model_path = None
-        model_load_error = str(e)
 
 
 load_model_on_startup()
-
-
-def ensure_model_loaded() -> None:
-    if model is None:
-        load_model_on_startup()
-
-    if model is None:
-        detail = model_load_error or "Model not loaded"
-        raise HTTPException(status_code=500, detail=detail)
 
 
 # ==================== PYDANTIC MODELS ====================
@@ -197,7 +97,6 @@ def _round_float(value: float, ndigits: int) -> float:
 
 def image_to_base64(image_array):
     """Convert numpy array (BGR) to base64 PNG string"""
-    ensure_runtime_dependencies()
     # Convert BGR to RGB for PIL
     if len(image_array.shape) == 3 and image_array.shape[2] == 3:
         rgb = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
@@ -211,7 +110,6 @@ def image_to_base64(image_array):
 
 def center_ear(image, mask):
     """Center the ear in the image using the mask centroid"""
-    ensure_runtime_dependencies()
     h, w = mask.shape
 
     coords = np.column_stack(np.where(mask > 0))
@@ -234,8 +132,8 @@ def segment_and_normalize(image_array):
     Segment the ear from an image array and normalize it.
     Returns the normalized ear image (256x256) as a numpy array.
     """
-    ensure_runtime_dependencies()
-    ensure_model_loaded()
+    if model is None:
+        raise Exception("Model not loaded")
 
     # Save to temp file for YOLO prediction
     tmp_path = None
@@ -265,54 +163,63 @@ def segment_and_normalize(image_array):
     segmented = image_array.copy()
     # segmented[mask == 0] = 0
 
-    # Crop a square region around the ear to preserve aspect ratio,
-    # centered on the ear's center of mass (centroid) for anatomical alignment
+    # SEGMENTATION LOGIC: Keep original image to avoid black background
+    segmented = image_array.copy()
+    # segmented[mask == 0] = 0 # Ensure this remains commented
+    
+    # Calculate crop area centered on the ear's center of mass
     coords = np.column_stack(np.where(mask > 0))
     if len(coords) == 0:
-        raise ValueError("No valid mask pixels found")
+        return cv2.resize(segmented, (IMAGE_SIZE, IMAGE_SIZE))
 
+    cy, cx = coords.mean(axis=0)
     y_min, x_min = coords.min(axis=0)
     y_max, x_max = coords.max(axis=0)
-
-    # Calculate center of mass
-    cy, cx = coords.mean(axis=0)
-    center_y = int(cy)
-    center_x = int(cx)
-
-    # Ensure the square is large enough to contain the whole ear when centered on the centroid
-    dist_y = max(abs(y_max - center_y), abs(center_y - y_min))
-    dist_x = max(abs(x_max - center_x), abs(center_x - x_min))
-    max_dim = int(max(dist_y, dist_x) * 2)
     
-    # Add a small padding (15% to be safe)
-    max_dim = int(max_dim * 1.15)
+    # Square calculation: take the largest radius and double it
+    dist_y = max(abs(y_max - cy), abs(cy - y_min))
+    dist_x = max(abs(x_max - cx), abs(cx - x_min))
+    
+    # We want a 1:1 square crop. We take the larger dimension for both attributes.
+    max_radius = max(dist_y, dist_x)
+    max_dim = int(max_radius * 2 * 1.15) # 15% padding
     
     half_dim = max_dim // 2
-
-    x1, y1 = center_x - half_dim, center_y - half_dim
-    x2, y2 = center_x + (max_dim - half_dim), center_y + (max_dim - half_dim)
+    x1, y1 = int(cx - half_dim), int(cy - half_dim)
+    x2, y2 = x1 + max_dim, y1 + max_dim
 
     img_h, img_w = segmented.shape[:2]
+    
+    # Get the portion of the crop box that is inside the original image bounds
     safe_x1, safe_y1 = max(0, x1), max(0, y1)
     safe_x2, safe_y2 = min(img_w, x2), min(img_h, y2)
-
+    
     cropped_square = segmented[safe_y1:safe_y2, safe_x1:safe_x2]
-    mask_square = mask[safe_y1:safe_y2, safe_x1:safe_x2]
-
-    pad_top, pad_bottom = max(0, -y1), max(0, y2 - img_h)
-    pad_left, pad_right = max(0, -x1), max(0, x2 - img_w)
-
+    
+    # Pad to restore the full max_dim x max_dim square
+    # Using BORDER_REPLICATE to keep the background natural instead of black
+    pad_top = max(0, -y1)
+    pad_bottom = max(0, y2 - img_h)
+    pad_left = max(0, -x1)
+    pad_right = max(0, x2 - img_w)
+    
     if pad_top > 0 or pad_bottom > 0 or pad_left > 0 or pad_right > 0:
         cropped_square = cv2.copyMakeBorder(cropped_square, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_REPLICATE)
-        mask_square = cv2.copyMakeBorder(mask_square, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=0)
+
+    # SECURE ASPECT RATIO: Final check to ensure it is perfectly square before resizing
+    ch, cw = cropped_square.shape[:2]
+    if ch != cw:
+        dim = max(ch, cw)
+        cropped_square = cv2.copyMakeBorder(
+            cropped_square, 0, dim - ch, 0, dim - cw, cv2.BORDER_REPLICATE
+        )
 
     # Normalize to IMAGE_SIZE x IMAGE_SIZE
+    # Resizing a square image to a square (256x256) ensures no distortion/compression
     normalized = cv2.resize(
         cropped_square, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_LINEAR
     )
-    # mask_resized = cv2.resize(mask_square, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_NEAREST)
-
-    # Return the perfectly square, undistorted image directly without center_ear shifting
+    
     return normalized
 
 
@@ -375,12 +282,23 @@ async def root():
         "message": "Ear Landmark Mapping API (Module 2)",
         "status": "running",
         "model_loaded": model is not None,
-        "loaded_model_path": loaded_model_path,
-        "model_error": model_load_error,
         "endpoints": {
             "health": "/health",
-            "segment": "/segment (POST) - Upload right & left ear images",
-            "mirror_and_measure": "/mirror-and-measure (POST) - Send right ear landmarks",
+            "phase_1": {
+                "segment": "/segment (POST) - Upload right & left ear images",
+                "mirror_and_measure": "/mirror-and-measure (POST) - Send right ear landmarks"
+            },
+            "phase_1_validation": {
+                "validate_frame": "/validate-frame (POST) - Real-time webcam validation with blue markers"
+            },
+            "phase_2_prepiercing": {
+                "detect_prepiercing": "/detect-prepiercing (POST) - Analyze image with blue points marked (PRE-PIERCING BASELINE)",
+                "get_prepiercing_baseline": "/get-prepiercing-baseline (POST) - Retrieve saved pre-piercing baseline"
+            },
+            "session_management": {
+                "get_session": "/session/{session_id} (GET) - Get session status",
+                "delete_session": "/session/{session_id} (DELETE) - Delete session"
+            }
         },
     }
 
@@ -391,10 +309,7 @@ async def health():
     return {
         "status": "healthy",
         "model_loaded": model is not None,
-        "configured_model_path": MODEL_PATH,
-        "loaded_model_path": loaded_model_path,
-        "available_model_paths": get_model_candidates(),
-        "model_error": model_load_error,
+        "model_path": MODEL_PATH,
         "image_size": IMAGE_SIZE,
         "pixels_per_cm": PIXELS_PER_CM,
     }
@@ -413,7 +328,8 @@ async def segment_ears(
       - right_ear_image: base64 PNG of the normalized right ear (for landmark clicking)
       - left_ear_image: base64 PNG of the normalized left ear (preview)
     """
-    ensure_model_loaded()
+    if model is None:
+        raise HTTPException(status_code=500, detail="Model not loaded")
 
     try:
         # Read right ear
@@ -540,6 +456,9 @@ async def mirror_and_measure(request: MirrorAndMeasureRequest):
     total_px = sum(d["distance_pixels"] for d in distances)
     total_cm = sum(d["distance_cm"] for d in distances)
 
+    total_px_rounded = _round_float(total_px, 3)
+    total_cm_rounded = _round_float(total_cm, 3)
+
     # Clean up session (optional - keeps memory usage low)
     # del sessions[session_id]
 
@@ -571,8 +490,8 @@ async def mirror_and_measure(request: MirrorAndMeasureRequest):
                 },
                 "distances": distances,
                 "total_distance": {
-                    "pixels": round(total_px, 3),
-                    "cm": round(total_cm, 3),
+                    "pixels": float(total_px_rounded),
+                    "cm": float(total_cm_rounded),
                 },
             },
         }
@@ -722,8 +641,9 @@ async def validate_frame(
                             (0, 255, 0), 1, tipLength=0.3)
             
             # Short guidance on image
-            guidance_part = str(msg.split("\u2192")[-1])
-            short = "OK" if correct else guidance_part.strip()[:14]
+            msg_parts = msg.split("\u2192")
+            guidance_part = str(msg_parts[-1]) if msg_parts else ""
+            short = "OK" if correct else str(guidance_part).strip()[:14]
             cv2.putText(annotated, short,
                         (int(matched_lp[0]) + 8, int(matched_lp[1]) + 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
@@ -746,7 +666,7 @@ async def validate_frame(
     if valid_points:
         # 10mm (1cm) error = 0% accuracy, 0mm error = 100% accuracy
         avg_err_mm = np.mean([r["error_cm"] * 10 for r in valid_points])
-        overall_accuracy = max(0, round(100 - (avg_err_mm * 10), 1)) 
+        overall_accuracy = max(0.0, _round_float(100.0 - (float(avg_err_mm) * 10.0), 1)) 
 
     return JSONResponse({
         "success": True,
@@ -760,6 +680,138 @@ async def validate_frame(
             "status": "Excellent" if overall_accuracy > 90 else "Good" if overall_accuracy > 70 else "Needs Work"
         },
         "annotated_image": image_to_base64(annotated)
+    })
+
+
+# ==================== PRE-PIERCING DETECTION (PHASE 2) ====================
+
+@app.post("/detect-prepiercing")
+async def detect_prepiercing(
+    file: UploadFile = File(...),
+    session_id: str = Form(default=""),
+    save_to_session: bool = Form(default=True),
+):
+    """
+    Phase 2: Pre-Piercing Detection
+    
+    Analyzes an image with blue points marked on the ear to detect and count them.
+    These marked blue points represent the locations where piercing will be done.
+    
+    Args:
+        file: Image file with blue points marked on ear
+        session_id: Optional session ID to save this as baseline (pre-piercing state)
+        save_to_session: Whether to save the image as pre-piercing baseline
+    
+    Returns:
+        - points_count: Number of blue points detected
+        - points: List of detected point coordinates
+        - annotated_image: Image with detected points highlighted and numbered
+        - message: Status message
+    """
+    try:
+        # Decode image
+        contents = await file.read()
+        nparr = np.frombuffer(contents, np.uint8)
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if image is None:
+            raise ValueError("Invalid image file")
+        
+        # Segment ear first to ensure we are looking at the right area
+        try:
+            ear_normalized = segment_and_normalize(image)
+        except Exception as e:
+            logger.warning(f"Ear segmentation failed in pre-piercing detection: {str(e)}")
+            ear_normalized = image # Fallback to original if segmentation fails
+            
+        # Detect blue points on the normalized ear
+        points, mask = detect_blue_points(ear_normalized)
+        point_count = len(points)
+        
+        is_prepiercing = point_count > 0
+        
+        if not is_prepiercing:
+            logger.warning("No blue points detected. Unable to declare as pre-piercing.")
+            return JSONResponse({
+                "success": True,
+                "is_prepiercing": False,
+                "points_count": 0,
+                "points": [],
+                "annotated_image": image_to_base64(ear_normalized),
+                "message": "⚠️ No blue points detected. This image does NOT qualify as a PRE-PIERCING state."
+            })
+        
+        # Draw detected points on image
+        annotated = draw_detected_points(ear_normalized, points)
+        
+        # Store pre-piercing baseline in session if requested
+        prepiercing_data = {
+            "points": points,
+            "points_count": point_count,
+            "image": ear_normalized.copy(),
+            "annotated_image": annotated.copy()
+        }
+        
+        if session_id and save_to_session and session_id in sessions:
+            sessions[session_id]["prepiercing"] = prepiercing_data
+            logger.info(f"Session {session_id}: Pre-piercing baseline saved with {point_count} points")
+        
+        # Prepare response
+        response = {
+            "success": True,
+            "is_prepiercing": True,
+            "stage": "PRE-PIERCING",
+            "points_count": point_count,
+            "points": [{"x": x, "y": y} for x, y in points],
+            "annotated_image": image_to_base64(annotated),
+            "message": f"✅ SUCCESS: {point_count} blue point(s) detected. Image declared as PRE-PIERCING BASELINE."
+        }
+        
+        if session_id and session_id in sessions:
+            response["session_id"] = session_id
+            response["prepiercing_saved"] = True
+        else:
+            response["prepiercing_saved"] = False
+        
+        return JSONResponse(response)
+    
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Pre-piercing detection error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/get-prepiercing-baseline")
+async def get_prepiercing_baseline(session_id: str):
+    """
+    Get the saved pre-piercing baseline for a session.
+    
+    Returns:
+        - points_count: Number of marked points
+        - points: Coordinates of all marked points
+        - baseline_image: The annotated image showing marked points
+    """
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session = sessions[session_id]
+    
+    if "prepiercing" not in session:
+        raise HTTPException(
+            status_code=404, 
+            detail="No pre-piercing baseline found. Please run /detect-prepiercing first."
+        )
+    
+    prepiercing = session["prepiercing"]
+    
+    return JSONResponse({
+        "success": True,
+        "session_id": session_id,
+        "points_count": prepiercing["points_count"],
+        "points": [{"x": x, "y": y} for x, y in prepiercing["points"]],
+        "baseline_image": image_to_base64(prepiercing["annotated_image"]),
+        "message": f"Pre-piercing baseline loaded: {prepiercing['points_count']} points"
     })
 
 
