@@ -475,10 +475,10 @@ async def mirror_and_measure(request: MirrorAndMeasureRequest):
     # Convert points
     right_points = [(p.x, p.y) for p in request.right_ear_points]
 
-    if len(right_points) < 2:
+    if len(right_points) < 1:
         raise HTTPException(
             status_code=400,
-            detail="At least 2 landmark points are required for distance calculation",
+            detail="At least 1 landmark point is required",
         )
 
     # Mirror points for left ear (horizontal flip)
