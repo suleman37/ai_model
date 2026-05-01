@@ -1363,6 +1363,51 @@
             return result.data;
         }
 
+        function getCameraErrorMessage(error) {
+            if (!window.isSecureContext && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+                return "Camera requires HTTPS or localhost. Open this app on a secure URL.";
+            }
+
+            switch (error?.name) {
+                case "NotAllowedError":
+                case "PermissionDeniedError":
+                    return "Camera permission was denied. Allow camera access in the browser and try again.";
+                case "NotFoundError":
+                case "DevicesNotFoundError":
+                    return "No camera device was found on this device.";
+                case "NotReadableError":
+                case "TrackStartError":
+                    return "Camera is busy in another app. Close other camera apps and try again.";
+                case "OverconstrainedError":
+                case "ConstraintNotSatisfiedError":
+                    return "Requested camera settings are not supported on this device.";
+                default:
+                    return error?.message || "Unable to access the camera on this device.";
+            }
+        }
+
+        async function requestCameraStream() {
+            const constraints = { video: { width: 640, height: 480, facingMode: "user" } };
+
+            if (navigator.mediaDevices?.getUserMedia) {
+                return navigator.mediaDevices.getUserMedia(constraints);
+            }
+
+            const legacyGetUserMedia =
+                navigator.getUserMedia ||
+                navigator.webkitGetUserMedia ||
+                navigator.mozGetUserMedia ||
+                navigator.msGetUserMedia;
+
+            if (legacyGetUserMedia) {
+                return new Promise((resolve, reject) => {
+                    legacyGetUserMedia.call(navigator, constraints, resolve, reject);
+                });
+            }
+
+            throw new Error(getCameraErrorMessage());
+        }
+
         // ==================== FILE INPUTS ====================
         document.getElementById("rightEarInput").addEventListener("change", (e) => {
             rightFile = e.target.files[0];
@@ -2336,7 +2381,7 @@
         async function openWebcam() {
             if (!sessionId) { showToast("No active session", "error"); return; }
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } });
+                const stream = await requestCameraStream();
                 webcamStream = stream;
                 document.getElementById("webcamVideo").srcObject = stream;
                 document.getElementById("webcamModal").classList.add("show");
@@ -2344,7 +2389,7 @@
                 startAutoDetectLoop();
                 showToast("Webcam started — auto ear detection is now running", "success");
             } catch (err) {
-                showToast("Camera access denied: " + err.message, "error");
+                showToast(getCameraErrorMessage(err), "error");
             }
         }
 
