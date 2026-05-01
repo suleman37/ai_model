@@ -1019,7 +1019,7 @@
             <div class="step-connector" id="connector2"></div>
             <div class="step-indicator" id="step3Indicator"><span class="step-num">3</span> Mark Points</div>
             <div class="step-connector" id="connector3"></div>
-            <div class="step-indicator" id="step4Indicator"><span class="step-num">4</span> View Results</div>
+            <div class="step-indicator" id="step4Indicator"><span class="step-num">4</span> Live Validation</div>
         </div>
 
         <!-- STEP 1: UPLOAD -->
@@ -1121,11 +1121,11 @@
 
         <!-- STEP 3: RESULTS -->
         <div class="card results-section" id="resultsCard">
-            <div class="card-title"><span>📊</span> Measurement Results</div>
+            <div class="card-title"><span>🎥</span> Live Validation</div>
 
             <!-- Validation launcher -->
             <div class="validation-modes">
-                <div class="section-label">CHOOSE EAR & LAUNCH VALIDATION</div>
+                <div class="section-label">CHOOSE EAR AND START REAL-TIME VALIDATION</div>
                 <div class="ear-toggle-row">
                     <button id="valToggleLeft" class="btn btn-secondary active" onclick="setGlobalEarSide('left')">👂
                         Left Ear</button>
@@ -1232,7 +1232,8 @@
 
     <script>
         // ==================== CONFIG ====================
-        const API_URL = "http://localhost:8003";
+        const DEFAULT_REMOTE_API_URL = "http://159.89.141.9:8000";
+        const API_URL = getApiUrl();
         const IMAGE_SIZE = 256;
         const DISPLAY_SIZE = 384;
 
@@ -1320,6 +1321,47 @@
         let dragStartPos = null;
         let initialTransform = null;
         let activeVertexIndex = -1;
+
+        function normalizeApiUrl(url) {
+            return typeof url === "string" && url.trim()
+                ? url.trim().replace(/\/$/, "")
+                : "";
+        }
+
+        function getApiUrl() {
+            const params = new URLSearchParams(window.location.search);
+            const explicitApiUrl =
+                normalizeApiUrl(params.get("api")) ||
+                normalizeApiUrl(window.localStorage.getItem("phase3ApiUrl"));
+
+            if (explicitApiUrl) {
+                return explicitApiUrl;
+            }
+
+            const { protocol, origin, hostname } = window.location;
+            if (protocol === "file:") {
+                return DEFAULT_REMOTE_API_URL;
+            }
+            if (hostname === "localhost" || hostname === "127.0.0.1") {
+                return DEFAULT_REMOTE_API_URL;
+            }
+            return normalizeApiUrl(origin);
+        }
+
+        async function readJsonSafe(resp) {
+            try {
+                return await resp.json();
+            } catch {
+                return null;
+            }
+        }
+
+        function requireDataEnvelope(result, fallbackMessage) {
+            if (!result || typeof result !== "object" || !result.data) {
+                throw new Error(fallbackMessage);
+            }
+            return result.data;
+        }
 
         // ==================== FILE INPUTS ====================
         document.getElementById("rightEarInput").addEventListener("change", (e) => {
@@ -1520,10 +1562,12 @@
             try {
                 showLoading("Segmenting ears & detecting blue points...");
                 const resp = await fetch(`${API_URL}/segment`, { method: "POST", body: formData });
-                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || "Segmentation failed"); }
+                const result = await readJsonSafe(resp);
+                if (!resp.ok) {
+                    throw new Error(result?.detail || result?.message || "Segmentation failed");
+                }
 
-                const result = await resp.json();
-                const data = result.data;
+                const data = requireDataEnvelope(result, "Segment API returned an incomplete response");
                 sessionId = data.session_id;
                 rightEarImage = data.right_ear_image;
                 leftEarImage = data.left_ear_image;
@@ -2180,9 +2224,10 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload),
                 });
-                if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || "Mirror failed"); }
-
-                const result = await resp.json();
+                const result = await readJsonSafe(resp);
+                if (!resp.ok) {
+                    throw new Error(result?.detail || result?.message || "Mirror failed");
+                }
                 displayResults(result);
                 setStep(4);
                 showToast("Landmarks mirrored! Open webcam to validate.", "success");
@@ -2196,7 +2241,9 @@
 
         // ==================== DISPLAY RESULTS ====================
         function displayResults(result) {
-            const data = result.data;
+            const data = requireDataEnvelope(result, "Mirror API returned an incomplete response");
+            const distances = Array.isArray(data.distances) ? data.distances : [];
+            const totalDistance = data.total_distance || { pixels: 0, cm: 0 };
 
             document.getElementById("resultImages").innerHTML = `
             <div class="ear-result-card">
@@ -2209,7 +2256,7 @@
             </div>
         `;
 
-            let rows = data.distances.map(d => `
+            let rows = distances.map(d => `
             <tr>
                 <td><span class="pair-badge">${d.from_point} → ${d.to_point}</span></td>
                 <td class="value-px">${d.distance_pixels.toFixed(3)}</td>
@@ -2220,8 +2267,8 @@
             rows += `
             <tr class="total-row">
                 <td><strong>Total</strong></td>
-                <td class="value-px"><strong>${data.total_distance.pixels.toFixed(3)}</strong></td>
-                <td class="value-cm"><strong>${data.total_distance.cm.toFixed(3)} cm</strong></td>
+                <td class="value-px"><strong>${totalDistance.pixels.toFixed(3)}</strong></td>
+                <td class="value-cm"><strong>${totalDistance.cm.toFixed(3)} cm</strong></td>
             </tr>
         `;
 
@@ -2295,7 +2342,7 @@
                 document.getElementById("webcamModal").classList.add("show");
                 isWebcamRunning = true;
                 startAutoDetectLoop();
-                showToast("Webcam started — align ear and capture", "success");
+                showToast("Webcam started — auto ear detection is now running", "success");
             } catch (err) {
                 showToast("Camera access denied: " + err.message, "error");
             }
@@ -2331,16 +2378,8 @@
 
             canvas.toBlob(async (blob) => {
                 lastCapturedBlob = blob;
-                const formData = new FormData();
-                formData.append("file", blob, "frame.jpg");
-                formData.append("session_id", sessionId);
-                formData.append("ear_side", currentEarSide);
-
                 try {
-                    const resp = await fetch(`${API_URL}/validate-frame`, { method: "POST", body: formData });
-                    if (!resp.ok) { showToast("API error in validation", "error"); btn.innerHTML = "📸 Capture & Analyze Snapshot"; btn.disabled = false; return; }
-
-                    const result = await resp.json();
+                    const result = await validateFrameBlob(blob);
                     if (result.success && result.ear_detected) {
                         document.getElementById("annotatedImg").src = `data:image/png;base64,${result.annotated_image}`;
                         showImprovementReport(result);
@@ -2357,7 +2396,28 @@
             }, "image/jpeg", 0.95);
         }
 
+        async function validateFrameBlob(blob) {
+            const formData = new FormData();
+            formData.append("file", blob, "frame.jpg");
+            formData.append("session_id", sessionId);
+            formData.append("ear_side", currentEarSide);
+
+            const resp = await fetch(`${API_URL}/validate-frame`, { method: "POST", body: formData });
+            const result = await readJsonSafe(resp);
+            if (!resp.ok) {
+                throw new Error(result?.detail || result?.message || "API error in validation");
+            }
+            if (!result || typeof result !== "object") {
+                throw new Error("Validation API returned an invalid response");
+            }
+            return result;
+        }
+
         function showImprovementReport(result) {
+            if (!result?.summary || !Array.isArray(result.guidance)) {
+                throw new Error("Validation result is incomplete");
+            }
+
             document.getElementById("accuracyPct").textContent = result.summary.overall_accuracy + "%";
             document.getElementById("overallStatus").textContent =
                 `${result.summary.status} — ${result.summary.detected_markers}/${result.summary.total_points} markers detected`;
@@ -2442,20 +2502,8 @@
             if (btn) { btn.innerHTML = "⏳ Auto-analyzing..."; btn.disabled = true; }
 
             try {
-                const valForm = new FormData();
-                valForm.append("file", blob, "frame.jpg");
-                valForm.append("session_id", sessionId);
-                valForm.append("ear_side", currentEarSide);
                 lastCapturedBlob = blob;
-
-                const resp = await fetch(`${API_URL}/validate-frame`, { method: "POST", body: valForm });
-                if (!resp.ok) {
-                    if (btn) { btn.innerHTML = "📸 Capture & Analyze Snapshot"; btn.disabled = false; }
-                    isAutoProcessing = false;
-                    return;
-                }
-
-                const result = await resp.json();
+                const result = await validateFrameBlob(blob);
                 if (result.success && result.ear_detected) {
                     document.getElementById("annotatedImg").src = `data:image/png;base64,${result.annotated_image}`;
                     showImprovementReport(result);
@@ -2465,6 +2513,8 @@
                 }
             } catch(e) {
                 console.error("Auto-validate error:", e);
+                showToast(e.message || "Auto-validation failed", "error");
+                stopAutoDetectLoop();
                 if (btn) btn.innerHTML = "📸 Capture & Analyze Snapshot";
             }
 
@@ -2479,8 +2529,10 @@
             try {
                 const resp = await fetch(`${API_URL}/`);
                 if (resp.ok) console.log("✓ Phase 2 API is running");
-                else showToast("⚠️ API not responding. Start: python app.py", "error");
-            } catch { showToast("⚠️ Cannot connect to API on port 8080", "error"); }
+                else showToast("⚠️ API not responding on configured server", "error");
+            } catch {
+                showToast(`⚠️ Cannot connect to API on ${API_URL}`, "error");
+            }
         });
     </script>
 </body>
