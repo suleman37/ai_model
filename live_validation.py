@@ -10,11 +10,26 @@ import argparse
 import requests
 from ultralytics import YOLO
 
+
+def resolve_existing_path(*candidates):
+    """Return the first existing path, or the first candidate as fallback for logging."""
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    return candidates[0]
+
+
 # ==================== CONFIGURATION ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(BASE_DIR)
-MODEL_PT = os.path.join(ROOT_DIR, "best.pt") # Root best.pt for Phase 1
-MODEL_TFLITE = os.path.join(ROOT_DIR, "models", "best_float16.tflite")
+MODEL_PT = resolve_existing_path(
+    os.path.join(BASE_DIR, "best.pt"),
+    os.path.join(os.path.dirname(BASE_DIR), "best.pt"),
+)
+MODEL_TFLITE = resolve_existing_path(
+    os.path.join(BASE_DIR, "best_float16.tflite"),
+    os.path.join(BASE_DIR, "models", "best_float16.tflite"),
+    os.path.join(os.path.dirname(BASE_DIR), "models", "best_float16.tflite"),
+)
 
 IMAGE_SIZE = 256
 PIXELS_PER_CM = 100

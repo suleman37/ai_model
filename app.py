@@ -29,9 +29,25 @@ import subprocess
 import threading
 
 
+def resolve_existing_path(*candidates: str) -> str:
+    """Return the first existing path, or the first candidate as fallback for logging."""
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    return candidates[0]
+
+
 # ==================== CONFIGURATION ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(os.path.dirname(BASE_DIR), "best.pt")
+MODEL_PATH = resolve_existing_path(
+    os.path.join(BASE_DIR, "best.pt"),
+    os.path.join(os.path.dirname(BASE_DIR), "best.pt"),
+)
+TFLITE_MODEL_PATH = resolve_existing_path(
+    os.path.join(BASE_DIR, "best_float16.tflite"),
+    os.path.join(BASE_DIR, "models", "best_float16.tflite"),
+    os.path.join(os.path.dirname(BASE_DIR), "models", "best_float16.tflite"),
+)
 PIXELS_PER_CM = 100
 IMAGE_SIZE = 256
 CONFIDENCE_THRESHOLD = 0.25
@@ -65,15 +81,17 @@ detect_model = None
 def load_model_on_startup():
     global model, detect_model
     try:
-        model = YOLO(MODEL_PATH)
-        logger.info(f"✓ YOLO model loaded from {MODEL_PATH}")
-        
-        tflite_path = os.path.join(os.path.dirname(BASE_DIR), "models", "best_float16.tflite")
-        if os.path.exists(tflite_path):
-            detect_model = YOLO(tflite_path, task='detect')
-            logger.info(f"✓ TFLite Detection model loaded from {tflite_path}")
+        if os.path.exists(MODEL_PATH):
+            model = YOLO(MODEL_PATH)
+            logger.info(f"✓ YOLO model loaded from {MODEL_PATH}")
         else:
-            logger.warning(f"⚠ TFLite model not found at {tflite_path}")
+            logger.warning(f"⚠ YOLO model not found at {MODEL_PATH}")
+
+        if os.path.exists(TFLITE_MODEL_PATH):
+            detect_model = YOLO(TFLITE_MODEL_PATH, task='detect')
+            logger.info(f"✓ TFLite Detection model loaded from {TFLITE_MODEL_PATH}")
+        else:
+            logger.warning(f"⚠ TFLite model not found at {TFLITE_MODEL_PATH}")
     except Exception as e:
         logger.error(f"✗ Failed to load models: {e}")
 
