@@ -14,7 +14,9 @@ import cv2
 import numpy as np
 import base64
 import io
+import importlib.util
 import os
+import sys
 import tempfile
 import uuid
 import logging
@@ -52,18 +54,44 @@ app.add_middleware(
 model = None
 detect_model = None
 
+
+def resolve_tflite_model_path():
+    candidates = [
+        os.path.join(BASE_DIR, "best_float16.tflite"),
+        os.path.join(BASE_DIR, "models", "best_float16.tflite"),
+        os.path.join(os.path.dirname(BASE_DIR), "models", "best_float16.tflite"),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return candidates[0]
+
+
+def has_tflite_backend():
+    try:
+        return (
+            importlib.util.find_spec("tflite_runtime") is not None
+            or importlib.util.find_spec("tensorflow") is not None
+        )
+    except ModuleNotFoundError:
+        return False
+
+
 def load_model_on_startup():
     global model, detect_model
     try:
         model = YOLO(MODEL_PATH)
+        detect_model = model
         logger.info(f"✓ YOLO model loaded from {MODEL_PATH}")
         
-        tflite_path = os.path.join(os.path.dirname(BASE_DIR), "models", "best_float16.tflite")
-        if os.path.exists(tflite_path):
+        tflite_path = resolve_tflite_model_path()
+        if not os.path.exists(tflite_path):
+            logger.warning(f"⚠ TFLite model not found at {tflite_path}. Falling back to {MODEL_PATH}")
+        elif not has_tflite_backend():
+            logger.warning("⚠ TFLite backend is unavailable (install tensorflow or tflite-runtime). Falling back to best.pt for detection.")
+        else:
             detect_model = YOLO(tflite_path, task='detect')
             logger.info(f"✓ TFLite Detection model loaded from {tflite_path}")
-        else:
-            logger.warning(f"⚠ TFLite model not found at {tflite_path}")
     except Exception as e:
         logger.error(f"✗ Failed to load models: {e}")
 
@@ -628,8 +656,13 @@ async def start_live_validation(session_id: str = Form(...), side: str = Form("l
 
     try:
         def run_script():
-            # Pass session_id and side as arguments
-            subprocess.run(["python", script_path, "--session_id", session_id, "--side", side], check=True)
+            try:
+                subprocess.run(
+                    [sys.executable, script_path, "--session_id", session_id, "--side", side],
+                    check=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                logger.error(f"Live validation exited with status {exc.returncode}")
         
         thread = threading.Thread(target=run_script)
         thread.daemon = True

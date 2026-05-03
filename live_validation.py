@@ -2,19 +2,46 @@
 # PHASE 3 — Standalone Live Validation (TFLite + YOLO)
 # ==========================================================
 
-import cv2
-import numpy as np
 import os
 import time
 import argparse
+import importlib.util
 import requests
+
+if not os.environ.get("QT_QPA_FONTDIR"):
+    for candidate in (
+        "/usr/share/fonts/truetype/dejavu",
+        "/usr/share/fonts/dejavu",
+        "/usr/share/fonts/truetype/liberation2",
+        "/usr/share/fonts/truetype/freefont",
+    ):
+        if os.path.isdir(candidate):
+            os.environ["QT_QPA_FONTDIR"] = candidate
+            break
+
+import cv2
+import numpy as np
 from ultralytics import YOLO
 
 # ==================== CONFIGURATION ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 MODEL_PT = os.path.join(BASE_DIR, "best.pt") 
-MODEL_TFLITE = os.path.join(ROOT_DIR, "models", "best_float16.tflite")
+
+
+def resolve_tflite_model_path():
+    candidates = [
+        os.path.join(BASE_DIR, "best_float16.tflite"),
+        os.path.join(BASE_DIR, "models", "best_float16.tflite"),
+        os.path.join(ROOT_DIR, "models", "best_float16.tflite"),
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return candidates[0]
+
+
+MODEL_TFLITE = resolve_tflite_model_path()
 
 IMAGE_SIZE = 256
 PIXELS_PER_CM = 100
@@ -47,6 +74,31 @@ def detect_blue_markers_live(image):
 
     pts.sort(key=lambda p: p[1])
     return pts
+
+
+def has_tflite_backend():
+    try:
+        return (
+            importlib.util.find_spec("tflite_runtime") is not None
+            or importlib.util.find_spec("tensorflow") is not None
+        )
+    except ModuleNotFoundError:
+        return False
+
+
+def configure_qt_font_dir():
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu",
+        "/usr/share/fonts/dejavu",
+        "/usr/share/fonts/truetype/liberation2",
+        "/usr/share/fonts/truetype/freefont",
+    ]
+    if os.environ.get("QT_QPA_FONTDIR"):
+        return
+    for candidate in candidates:
+        if os.path.isdir(candidate):
+            os.environ["QT_QPA_FONTDIR"] = candidate
+            return
 
 def get_point_guidance(digital, live):
     dx = digital[0] - live[0]
@@ -111,9 +163,17 @@ def segment_and_normalize_v2(image_array, seg_model):
 
 def main():
     print("Initializing Phase 3 Live Validator...")
+    configure_qt_font_dir()
     try:
-        detect_model = YOLO(MODEL_TFLITE, task='detect')
         seg_model = YOLO(MODEL_PT)
+        detect_model = seg_model
+        if os.path.exists(MODEL_TFLITE) and has_tflite_backend():
+            detect_model = YOLO(MODEL_TFLITE, task='detect')
+            print(f"✓ TFLite detection model loaded from {MODEL_TFLITE}")
+        elif os.path.exists(MODEL_TFLITE):
+            print("⚠ TFLite backend missing. Falling back to best.pt for detection.")
+        else:
+            print(f"⚠ TFLite model not found at {MODEL_TFLITE}. Falling back to best.pt for detection.")
         print("✓ Models Loaded!")
     except Exception as e:
         print(f"Error loading models: {e}")
