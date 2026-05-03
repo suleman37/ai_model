@@ -1127,23 +1127,16 @@
             <div class="validation-modes">
                 <div class="section-label">CHOOSE EAR & LAUNCH VALIDATION</div>
                 <div class="ear-toggle-row">
-                <!-- Validation launcher -->
-                <div class="validation-modes" style="margin-bottom: 32px; padding: 20px; background: rgba(255,255,255,0.02); border-radius: 12px; border: 1px solid rgba(59, 130, 246, 0.15);">
-                    <div style="font-size: 0.85rem; color: var(--text-secondary); text-align: center; margin-bottom: 12px; font-weight: 600;">CHOOSE EAR & LAUNCH VALIDATION</div>
-                    <div style="display: flex; justify-content: center; gap: 8px; margin-bottom: 16px;">
-                        <button id="valToggleLeft" class="btn btn-secondary active" onclick="setGlobalEarSide('left')" style="padding: 6px 16px; font-size: 0.8rem; border-radius: 6px;">👂 Left Ear</button>
-                        <button id="valToggleRight" class="btn btn-secondary" onclick="setGlobalEarSide('right')" style="padding: 6px 16px; font-size: 0.8rem; border-radius: 6px;">👂 Right Ear</button>
-                    </div>
-                    <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; flex-direction: column; align-items: center;">
-                        <button class="btn btn-primary" id="openWebcamBtn" onclick="openWebcam()"
-                            style="background:linear-gradient(135deg,#3b82f6,#2563eb); width: 100%; max-width: 300px; font-size: 0.85rem;">
-                            🌐 Browser Webcam (Frame-by-Frame)
-                        </button>
-                        <button class="btn btn-primary" id="launchLocalLiveBtn" onclick="launchLocalLive()"
-                            style="background:linear-gradient(135deg,#10b981,#059669); width: 100%; max-width: 300px; font-size: 0.85rem;">
-                            ⚡ Integrated High-Speed Live (Local)
-                        </button>
-                    </div>
+                    <button id="valToggleLeft" class="btn btn-secondary active" onclick="setGlobalEarSide('left')">👂
+                        Left Ear</button>
+                    <button id="valToggleRight" class="btn btn-secondary" onclick="setGlobalEarSide('right')">👂 Right
+                        Ear</button>
+                </div>
+                <div class="webcam-launch-row">
+                    <button class="btn btn-primary" id="openWebcamBtn" onclick="openWebcam()"
+                        style="background:linear-gradient(135deg,#10b981,#059669); max-width:220px; font-size:0.85rem;">
+                        🎥 Real-time Webcam
+                    </button>
                 </div>
             </div>
 
@@ -1239,7 +1232,7 @@
 
     <script>
         // ==================== CONFIG ====================
-        const API_URL = "http://localhost:8003";
+        const API_URL = "http://localhost:8080";
         const IMAGE_SIZE = 256;
         const DISPLAY_SIZE = 384;
 
@@ -1464,11 +1457,11 @@
                 }
             }
 
-            setStep(3);
-            if (canvasImg) {
-                drawCanvas();
-                updatePointCount();
-            }
+        setStep(3);
+        if (canvasImg) {
+            drawCanvas();
+            updatePointCount();
+        }
         }
 
         function getTransformedTrianglePoints() {
@@ -2301,7 +2294,6 @@
                 document.getElementById("webcamVideo").srcObject = stream;
                 document.getElementById("webcamModal").classList.add("show");
                 isWebcamRunning = true;
-                startAutoDetectLoop();
                 showToast("Webcam started — align ear and capture", "success");
             } catch (err) {
                 showToast("Camera access denied: " + err.message, "error");
@@ -2310,16 +2302,10 @@
 
         function stopWebcam() {
             isWebcamRunning = false;
-            stopAutoDetectLoop();
             if (webcamStream) webcamStream.getTracks().forEach(t => t.stop());
             document.getElementById("webcamModal").classList.remove("show");
             document.getElementById("annotatedImg").src = "";
             document.getElementById("improvementReport").classList.remove("show");
-
-            document.getElementById("webcamVideo").style.display = "block";
-            document.getElementById("analyzeBtn").style.display = "block";
-            document.getElementById("analyzeBtn").innerHTML = "📸 Capture & Analyze Snapshot";
-            document.getElementById("analyzeBtn").disabled = false;
         }
 
         async function captureSnapshot() {
@@ -2393,113 +2379,6 @@
             t.textContent = msg; t.className = `toast ${type}`;
             requestAnimationFrame(() => t.classList.add("show"));
             setTimeout(() => t.classList.remove("show"), 3500);
-        }
-
-        // ==================== AUTO EAR DETECTION LOOP ====================
-        let autoDetectTimer = null;
-        let isAutoProcessing = false;
-
-        function startAutoDetectLoop() {
-            stopAutoDetectLoop();
-            isAutoProcessing = false;
-            autoDetectTimer = setInterval(autoDetectAndValidate, 500);
-        }
-
-        function stopAutoDetectLoop() {
-            if (autoDetectTimer) {
-                clearInterval(autoDetectTimer);
-                autoDetectTimer = null;
-            }
-            isAutoProcessing = false;
-        }
-
-        async function autoDetectAndValidate() {
-            if (!isWebcamRunning || !sessionId || isAutoProcessing) return;
-
-            const video = document.getElementById("webcamVideo");
-            const canvas = document.getElementById("captureCanvas");
-            if (!video || video.videoWidth === 0) return;
-
-            const ctx = canvas.getContext("2d");
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-            let blob;
-            try {
-                blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.8));
-            } catch (e) { return; }
-            if (!blob) return;
-
-            // Step 1: Quick detection
-            try {
-                const detectForm = new FormData();
-                detectForm.append("file", blob, "detect.jpg");
-                const detectResp = await fetch(`${API_URL}/detect-ear`, { method: "POST", body: detectForm });
-                if (!detectResp.ok) return;
-                const detectResult = await detectResp.json();
-
-                if (!detectResult.ear_detected) return;
-            } catch (e) { return; }
-
-            // Step 2: Ear detected - auto trigger full validation
-            isAutoProcessing = true;
-
-            const btn = document.getElementById("analyzeBtn");
-            if (btn) { btn.innerHTML = "⏳ Auto-analyzing..."; btn.disabled = true; }
-
-            try {
-                const valForm = new FormData();
-                valForm.append("file", blob, "frame.jpg");
-                valForm.append("session_id", sessionId);
-                valForm.append("ear_side", currentEarSide);
-                lastCapturedBlob = blob;
-
-                const resp = await fetch(`${API_URL}/validate-frame`, { method: "POST", body: valForm });
-                if (!resp.ok) {
-                    if (btn) { btn.innerHTML = "📸 Capture & Analyze Snapshot"; btn.disabled = false; }
-                    isAutoProcessing = false;
-                    return;
-                }
-
-                const result = await resp.json();
-                if (result.success && result.ear_detected) {
-                    document.getElementById("annotatedImg").src = `data:image/png;base64,${result.annotated_image}`;
-                    showImprovementReport(result);
-                    if (btn) btn.innerHTML = "✅ Auto-validated (scanning continues...)";
-                } else {
-                    if (btn) btn.innerHTML = "📸 Capture & Analyze Snapshot";
-                }
-            } catch (e) {
-                console.error("Auto-validate error:", e);
-                if (btn) btn.innerHTML = "📸 Capture & Analyze Snapshot";
-            }
-
-            if (btn) btn.disabled = false;
-            // Wait a bit before next auto-detect cycle
-            setTimeout(() => { isAutoProcessing = false; }, 1000);
-        }
-
-
-        async function launchLocalLive() {
-            if (!sessionId) {
-                showToast("Please upload images first to start a session", "error");
-                return;
-            }
-            try {
-                const formData = new FormData();
-                formData.append("session_id", sessionId);
-                formData.append("side", currentEarSide || 'left');
-                const resp = await fetch(`${API_URL}/start-live-validation`, { method: "POST", body: formData });
-                const result = await resp.json();
-                if (result.success) {
-                    showToast(result.message, "success");
-                } else {
-                    showToast("Error: " + result.detail, "error");
-                }
-            } catch (err) {
-                showToast("Failed to launch local live validation: " + err, "error");
-            }
         }
 
         // ==================== HEALTH CHECK ====================

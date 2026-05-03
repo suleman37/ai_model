@@ -1,21 +1,14 @@
 # ==========================================================
-# PHASE 2 — Blue Point Detection & Validation API
-# ==========================================================
-# Step 1: Upload right + left ear → YOLO segment + normalize
-#          → detect whether blue points exist
-# Step 2: User clicks landmarks on right ear canvas (frontend)
-# Step 3: /mirror-and-measure → mirror points to left ear
-# Step 4: /validate-frame → live webcam, detect physical blue
-#          markers, compare to stored digital points
+# PHASE 3 — Pattern Detection & Validation API
 # ==========================================================
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Any, Dict, List
-import importlib.util
 import uvicorn
 import cv2
 import numpy as np
@@ -30,12 +23,11 @@ from ultralytics import YOLO
 from blue_point_detector import detect_blue_points, draw_detected_points
 import subprocess
 import threading
-import sys
 
 
 # ==================== CONFIGURATION ====================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR = os.path.dirname(BASE_DIR)
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
 IMAGE_SIZE          = 256
 PIXELS_PER_CM       = 100
 CONFIDENCE_THRESHOLD = 0.25
@@ -46,7 +38,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ==================== FASTAPI APP ====================
-app = FastAPI(title="Phase 2 — Blue Point Validation API")
+app = FastAPI(title="Phase 3 — Blue Point Validation API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -59,82 +51,19 @@ app.add_middleware(
 # ==================== LOAD MODEL ====================
 model = None
 detect_model = None
-segment_model_path = None
-detect_model_path = None
-
-
-def resolve_existing_path(env_var: str, candidates: List[str]):
-    configured_path = os.getenv(env_var)
-    ordered_candidates = [configured_path] if configured_path else []
-    ordered_candidates.extend(candidates)
-
-    seen = set()
-    for candidate in ordered_candidates:
-        if not candidate:
-            continue
-        resolved = os.path.abspath(candidate)
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if os.path.exists(resolved):
-            return resolved
-    return None
-
-
-def has_tflite_runtime() -> bool:
-    return (
-        importlib.util.find_spec("tflite_runtime") is not None
-        or importlib.util.find_spec("tensorflow") is not None
-    )
-
-
-SEGMENT_MODEL_CANDIDATES = [
-    os.path.join(BASE_DIR, "best.pt"),
-    os.path.join(ROOT_DIR, "best.pt"),
-    os.path.join(ROOT_DIR, "ai_model", "best.pt"),
-    os.path.join(ROOT_DIR, "model_phase_2", "best.pt"),
-    os.path.join(ROOT_DIR, "model_phase_1", "best.pt"),
-    os.path.join(ROOT_DIR, "pt_to_tflite", "best.pt"),
-    os.path.join(ROOT_DIR, "pt_to_tflite", "conversion_workspace", "best.pt"),
-]
-
-DETECT_MODEL_CANDIDATES = [
-    os.path.join(BASE_DIR, "models", "best_float16.tflite"),
-    os.path.join(ROOT_DIR, "models", "best_float16.tflite"),
-    os.path.join(ROOT_DIR, "ai_model", "best_float16.tflite"),
-    os.path.join(ROOT_DIR, "pt_to_tflite", "conversion_workspace", "best_saved_model", "best_float16.tflite"),
-    os.path.join(ROOT_DIR, "pt_to_tflite", "mobile_assets", "final_deploy_model.tflite"),
-    os.path.join(ROOT_DIR, "pt_to_tflite", "mobile_assets", "best_320_mobile.tflite"),
-]
 
 def load_model_on_startup():
-    global model, detect_model, segment_model_path, detect_model_path
+    global model, detect_model
     try:
-        segment_model_path = resolve_existing_path("YOLO_SEG_MODEL_PATH", SEGMENT_MODEL_CANDIDATES)
-        detect_model_path = resolve_existing_path("YOLO_DETECT_MODEL_PATH", DETECT_MODEL_CANDIDATES)
-
-        if segment_model_path:
-            model = YOLO(segment_model_path)
-            logger.info(f"✓ YOLO segmentation model loaded from {segment_model_path}")
+        model = YOLO(MODEL_PATH)
+        logger.info(f"✓ YOLO model loaded from {MODEL_PATH}")
+        
+        tflite_path = os.path.join(os.path.dirname(BASE_DIR), "models", "best_float16.tflite")
+        if os.path.exists(tflite_path):
+            detect_model = YOLO(tflite_path, task='detect')
+            logger.info(f"✓ TFLite Detection model loaded from {tflite_path}")
         else:
-            logger.error(
-                "✗ YOLO segmentation model not found. Checked: %s",
-                ", ".join(os.path.abspath(path) for path in SEGMENT_MODEL_CANDIDATES),
-            )
-
-        if detect_model_path and has_tflite_runtime():
-            detect_model = YOLO(detect_model_path, task='detect')
-            logger.info(f"✓ TFLite Detection model loaded from {detect_model_path}")
-        elif detect_model_path:
-            logger.warning(
-                "⚠ TFLite model found at %s but tflite_runtime/tensorflow is not installed. Falling back to the .pt model.",
-                detect_model_path,
-            )
-        else:
-            logger.warning(
-                "⚠ TFLite model not found. Checked: %s",
-                ", ".join(os.path.abspath(path) for path in DETECT_MODEL_CANDIDATES),
-            )
+            logger.warning(f"⚠ TFLite model not found at {tflite_path}")
     except Exception as e:
         logger.error(f"✗ Failed to load models: {e}")
 
@@ -151,6 +80,7 @@ class Point(BaseModel):
 class MirrorRequest(BaseModel):
     session_id: str
     right_ear_points: List[Point]
+    piercing_type: str = None
 
 
 # ==================== UTILITIES ====================
@@ -235,18 +165,71 @@ def segment_and_normalize(image_array):
 
 
 def draw_landmarks_with_lines(image, points,
-                               color=(0, 0, 255),
-                               text_color=(0, 255, 255),
-                               line_color=(0, 255, 0)):
+                               color=(240, 248, 255), # AliceBlue (Pearl)
+                               text_color=(255, 255, 255), # White
+                               line_color=(220, 220, 220), # Silver
+                                is_closed=False,
+                               is_dashed=False,
+                               label_side="right",
+                               is_gold=False,
+                               piercing_type: str = None):
     img = image.copy()
-    for i in range(len(points) - 1):
-        pt1 = (int(points[i][0]),     int(points[i][1]))
-        pt2 = (int(points[i+1][0]),   int(points[i+1][1]))
-        cv2.line(img, pt1, pt2, line_color, 2)
+    num_pts = len(points)
+    for i in range(num_pts):
+        if i < num_pts - 1:
+            pt1 = (int(points[i][0]),   int(points[i][1]))
+            pt2 = (int(points[i+1][0]), int(points[i+1][1]))
+            
+            if is_dashed:
+                # Custom dashed line
+                dist = np.hypot(pt2[0] - pt1[0], pt2[1] - pt1[1])
+                dash_len = 8
+                if dist > dash_len:
+                    num_segments = int(dist / dash_len)
+                    for j in range(num_segments):
+                        if j % 2 == 0:
+                            s = j / num_segments
+                            e = (j + 1) / num_segments
+                            p1 = (int(pt1[0] + (pt2[0] - pt1[0]) * s), int(pt1[1] + (pt2[1] - pt1[1]) * s))
+                            p2_sub = (int(pt1[0] + (pt2[0] - pt1[0]) * e), int(pt1[1] + (pt2[1] - pt1[1]) * e))
+                            cv2.line(img, p1, p2_sub, line_color, 1) # Thinner professional line
+                else:
+                    cv2.line(img, pt1, pt2, line_color, 1)
+            else:
+                if not is_gold:
+                    cv2.line(img, pt1, pt2, line_color, 1)
+                
+        elif is_closed and num_pts > 2:
+            pt1 = (int(points[i][0]),     int(points[i][1]))
+            pt2 = (int(points[0][0]),     int(points[0][1]))
+            cv2.line(img, pt1, pt2, line_color, 2)
+            
     for i, (x, y) in enumerate(points):
-        cv2.circle(img, (int(x), int(y)), 5, color, -1)
-        cv2.putText(img, str(i + 1), (int(x) + 6, int(y) - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
+        # Default radius
+        radius = 6 if not is_gold else 5
+        
+        if piercing_type == 'lobetrio' and i < 3:
+            # Lobe Trio has specific sizes: 1(Large) -> 2(Medium) -> 3(Small)
+            radii = [8, 6, 4]
+            radius = radii[i]
+
+        if is_gold or piercing_type == 'impuria' or piercing_type == 'lobetrio':
+            # Draw elegant silver/white stud
+            cv2.circle(img, (int(x), int(y)), radius, (255, 255, 255), -1) 
+            cv2.circle(img, (int(x), int(y)), radius, (180, 180, 180), 1)   
+            cv2.circle(img, (int(x)-1, int(y)-1), max(1, radius // 4), (255, 255, 255), -1)
+        else:
+            # Draw elegant pearl landmark
+            cv2.circle(img, (int(x), int(y)), radius, (255, 255, 255), -1)
+            cv2.circle(img, (int(x), int(y)), radius, (200, 200, 200), 1)
+        
+        if piercing_type != 'impuria' and piercing_type != 'lobetrio':
+            # Offset labels based on which side they should appear
+            off_x = 10 if label_side == "right" else -24
+            cv2.putText(img, str(i + 1), (int(x) + off_x + 1, int(y) - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+            cv2.putText(img, str(i + 1), (int(x) + off_x, int(y) - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, text_color, 1)
     return img
 
 
@@ -307,11 +290,11 @@ def get_point_guidance(digital, live):
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "Phase 2 Blue Point Validation API",
-            "model_loaded": model is not None,
-            "segment_model_path": segment_model_path,
-            "detect_model_loaded": detect_model is not None,
-            "detect_model_path": detect_model_path}
+    # Serve index.html as the root page
+    index_path = os.path.join(BASE_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"status": "ok", "message": "Phase 3 API is running", "model_loaded": model is not None}
 
 
 # ----------------------------------------------------------
@@ -323,13 +306,7 @@ async def segment_ears(
     leftEar:  UploadFile = File(...),
 ):
     if model is None:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "YOLO segmentation model not loaded. "
-                "Set YOLO_SEG_MODEL_PATH or place best.pt in one of the expected model folders."
-            ),
-        )
+        raise HTTPException(status_code=500, detail="YOLO model not loaded")
 
     try:
         right_bytes = await rightEar.read()
@@ -365,13 +342,14 @@ async def segment_ears(
         return JSONResponse({
             "success": True,
             "data": {
-                "session_id":        session_id,
-                "image_size":        IMAGE_SIZE,
-                "right_ear_image":   image_to_base64(right_annotated),
-                "left_ear_image":    image_to_base64(left_annotated),
-                "right_blue_points": len(right_pts),
-                "left_blue_points":  len(left_pts),
-                "has_blue_points":   len(right_pts) > 0 or len(left_pts) > 0,
+                "session_id":              session_id,
+                "image_size":              IMAGE_SIZE,
+                "right_ear_image":         image_to_base64(right_annotated),
+                "left_ear_image":          image_to_base64(left_annotated),
+                "right_blue_points":       len(right_pts),
+                "right_blue_points_coords": [{"x": float(p[0]), "y": float(p[1])} for p in right_pts],
+                "left_blue_points":        len(left_pts),
+                "has_blue_points":         len(right_pts) > 0 or len(left_pts) > 0,
             }
         })
 
@@ -406,12 +384,33 @@ async def mirror_and_measure(request: MirrorRequest):
     ]
 
     # Draw on both ears
-    right_with_landmarks = draw_landmarks_with_lines(right_ear, right_points)
-    left_with_landmarks  = draw_landmarks_with_lines(left_ear,  left_points)
+    is_triangle  = request.piercing_type == "triangle"
+    is_snakebite = request.piercing_type == "snakebite"
+    is_impuria   = request.piercing_type == "impuria"
+    is_dashed    = request.piercing_type == "snake_curve"
+    
+    # Determine which side labels should go based on point positions (favor 'outer' side)
+    avg_x = np.mean([p[0] for p in right_points])
+    # If points are on the right (avg_x > 128), labels go to the RIGHT (outer edge)
+    r_label_side = "right" if avg_x > IMAGE_SIZE / 2 else "left"
+    # Left ear is mirrored, so labels also flip side
+    l_label_side = "left" if avg_x > IMAGE_SIZE / 2 else "right"
 
-    # Calculate distances between consecutive points
+    right_with_landmarks = draw_landmarks_with_lines(right_ear, right_points, 
+                                                     is_closed=is_triangle, is_dashed=is_dashed, 
+                                                     label_side=r_label_side, is_gold=is_snakebite or is_impuria,
+                                                     piercing_type=request.piercing_type)
+    left_with_landmarks  = draw_landmarks_with_lines(left_ear,  left_points,  
+                                                     is_closed=is_triangle, is_dashed=is_dashed, 
+                                                     label_side=l_label_side, is_gold=is_snakebite or is_impuria,
+                                                     piercing_type=request.piercing_type)
+
+    # Calculate distances between points
+    num_pts = len(left_points)
     distances = []
-    for i in range(len(left_points) - 1):
+    
+    # 1 -> 2, 2 -> 3, etc.
+    for i in range(num_pts - 1):
         p1 = np.array(left_points[i])
         p2 = np.array(left_points[i + 1])
         px  = float(np.linalg.norm(p1 - p2))
@@ -423,14 +422,28 @@ async def mirror_and_measure(request: MirrorRequest):
             "distance_cm":      _round_float(cm, 3),
         })
 
+    # For triangle, add 3 -> 1
+    if is_triangle and num_pts == 3:
+        p1 = np.array(left_points[2])
+        p0 = np.array(left_points[0])
+        px = float(np.linalg.norm(p1 - p0))
+        cm = px / PIXELS_PER_CM
+        distances.append({
+            "from_point":       3,
+            "to_point":         1,
+            "distance_pixels":  _round_float(px, 3),
+            "distance_cm":      _round_float(cm, 3),
+        })
+
     total_px = sum(d["distance_pixels"] for d in distances)
     total_cm = sum(d["distance_cm"]     for d in distances)
 
     # Save in session for /validate-frame
-    sessions[session_id]["right_points"] = right_points
-    sessions[session_id]["left_points"]  = left_points
+    sessions[session_id]["right_points"]  = right_points
+    sessions[session_id]["left_points"]   = left_points
+    sessions[session_id]["piercing_type"] = request.piercing_type
 
-    logger.info(f"Session {session_id}: {len(right_points)} landmarks mirrored")
+    logger.info(f"Session {session_id}: {len(right_points)} landmarks mirrored. Piercing: {request.piercing_type}")
 
     return JSONResponse({
         "success": True,
@@ -607,7 +620,7 @@ async def delete_session(session_id: str):
 @app.post("/start-live-validation")
 async def start_live_validation(session_id: str = Form(...), side: str = Form("left")):
     """
-    Launches the standalone live_validation.py script for Phase 2.
+    Launches the standalone live_validation.py script for Phase 3 with session data.
     """
     script_path = os.path.join(BASE_DIR, "live_validation.py")
     if not os.path.exists(script_path):
@@ -616,7 +629,7 @@ async def start_live_validation(session_id: str = Form(...), side: str = Form("l
     try:
         def run_script():
             # Pass session_id and side as arguments
-            subprocess.run([sys.executable, script_path, "--session_id", session_id, "--side", side], check=True)
+            subprocess.run(["python", script_path, "--session_id", session_id, "--side", side], check=True)
         
         thread = threading.Thread(target=run_script)
         thread.daemon = True
@@ -651,16 +664,9 @@ async def detect_ear(file: UploadFile = File(...)):
             tmp_path = tmp.name
             cv2.imwrite(tmp_path, frame)
         
-        # Prefer the TFLite detection model only when its runtime is available.
+        # Use TFLite detection model if available
         target_model = detect_model if detect_model is not None else model
-        try:
-            results = target_model.predict(source=tmp_path, conf=CONFIDENCE_THRESHOLD, verbose=False)
-        except ModuleNotFoundError as e:
-            if target_model is detect_model:
-                logger.warning("TFLite runtime unavailable during /detect-ear: %s. Falling back to YOLO .pt model.", e)
-                results = model.predict(source=tmp_path, conf=CONFIDENCE_THRESHOLD, verbose=False)
-            else:
-                raise
+        results = target_model.predict(source=tmp_path, conf=CONFIDENCE_THRESHOLD, verbose=False)
         r = results[0]
     finally:
         if tmp_path and os.path.exists(tmp_path):
@@ -677,11 +683,8 @@ async def detect_ear(file: UploadFile = File(...)):
     })
 
 
-# ==================== MOUNT UI ====================
-app.mount("/ui", StaticFiles(directory=BASE_DIR, html=True), name="ui")
-
-
 # ==================== RUN SERVER ====================
 if __name__ == "__main__":
-    print("🚀 Phase 2 Blue Point Validation API on http://localhost:8080")
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    print("🚀 Phase 3 Blue Point Validation API on http://localhost:8003")
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8003)

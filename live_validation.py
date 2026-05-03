@@ -1,5 +1,5 @@
 # ==========================================================
-# PHASE 2 — Standalone Live Validation (TFLite + YOLO)
+# PHASE 3 — Standalone Live Validation (TFLite + YOLO)
 # ==========================================================
 
 import cv2
@@ -7,62 +7,18 @@ import numpy as np
 import os
 import time
 import argparse
-import importlib.util
 import requests
 from ultralytics import YOLO
 
 # ==================== CONFIGURATION ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
+MODEL_PT = os.path.join(BASE_DIR, "best.pt") 
+MODEL_TFLITE = os.path.join(ROOT_DIR, "models", "best_float16.tflite")
 
 IMAGE_SIZE = 256
 PIXELS_PER_CM = 100
 CONF_THRESHOLD = 0.25
-
-
-def resolve_existing_path(env_var, candidates):
-    configured_path = os.getenv(env_var)
-    ordered_candidates = [configured_path] if configured_path else []
-    ordered_candidates.extend(candidates)
-
-    seen = set()
-    for candidate in ordered_candidates:
-        if not candidate:
-            continue
-        resolved = os.path.abspath(candidate)
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if os.path.exists(resolved):
-            return resolved
-    return None
-
-
-def has_tflite_runtime():
-    return (
-        importlib.util.find_spec("tflite_runtime") is not None
-        or importlib.util.find_spec("tensorflow") is not None
-    )
-
-
-SEGMENT_MODEL_CANDIDATES = [
-    os.path.join(BASE_DIR, "best.pt"),
-    os.path.join(ROOT_DIR, "best.pt"),
-    os.path.join(ROOT_DIR, "ai_model", "best.pt"),
-    os.path.join(ROOT_DIR, "model_phase_2", "best.pt"),
-    os.path.join(ROOT_DIR, "model_phase_1", "best.pt"),
-    os.path.join(ROOT_DIR, "pt_to_tflite", "best.pt"),
-    os.path.join(ROOT_DIR, "pt_to_tflite", "conversion_workspace", "best.pt"),
-]
-
-DETECT_MODEL_CANDIDATES = [
-    os.path.join(BASE_DIR, "models", "best_float16.tflite"),
-    os.path.join(ROOT_DIR, "models", "best_float16.tflite"),
-    os.path.join(ROOT_DIR, "ai_model", "best_float16.tflite"),
-    os.path.join(ROOT_DIR, "pt_to_tflite", "conversion_workspace", "best_saved_model", "best_float16.tflite"),
-    os.path.join(ROOT_DIR, "pt_to_tflite", "mobile_assets", "final_deploy_model.tflite"),
-    os.path.join(ROOT_DIR, "pt_to_tflite", "mobile_assets", "best_320_mobile.tflite"),
-]
 
 # ==================== CORE LOGIC ====================
 
@@ -151,50 +107,14 @@ def segment_and_normalize_v2(image_array, seg_model):
 
     return cv2.resize(cropped, (IMAGE_SIZE, IMAGE_SIZE), interpolation=cv2.INTER_LINEAR)
 
-
-def predict_ear_presence(image_array, inference_model):
-    results = inference_model.predict(source=image_array, conf=CONF_THRESHOLD, verbose=False)
-    result = results[0]
-
-    has_boxes = result.boxes is not None and len(result.boxes) > 0
-    has_masks = result.masks is not None and len(result.masks.data) > 0
-    has_ear = has_boxes or has_masks
-
-    box = None
-    if has_boxes:
-        box = result.boxes[0].xyxy[0].cpu().numpy()
-
-    return has_ear, box
-
 # ==================== MAIN EXECUTION ====================
 
 def main():
-    print("Initializing Phase 2 Live Validator...")
+    print("Initializing Phase 3 Live Validator...")
     try:
-        detect_model_path = resolve_existing_path("YOLO_DETECT_MODEL_PATH", DETECT_MODEL_CANDIDATES)
-        seg_model_path = resolve_existing_path("YOLO_SEG_MODEL_PATH", SEGMENT_MODEL_CANDIDATES)
-
-        if not seg_model_path:
-            raise FileNotFoundError(
-                "YOLO segmentation model not found. Set YOLO_SEG_MODEL_PATH or place best.pt in ai_model/ or model_phase_2/."
-            )
-
-        seg_model = YOLO(seg_model_path)
-        detect_model = None
-
-        if detect_model_path and has_tflite_runtime():
-            detect_model = YOLO(detect_model_path, task='detect')
-        elif detect_model_path:
-            print("⚠ TFLite runtime not installed. Falling back to the YOLO .pt model for live ear detection.")
-        else:
-            print("⚠ TFLite detection model not found. Falling back to the YOLO .pt model for live ear detection.")
-
+        detect_model = YOLO(MODEL_TFLITE, task='detect')
+        seg_model = YOLO(MODEL_PT)
         print("✓ Models Loaded!")
-        print(f"  Segmentation: {seg_model_path}")
-        if detect_model is not None:
-            print(f"  Detection: {detect_model_path}")
-        else:
-            print(f"  Detection fallback: {seg_model_path}")
     except Exception as e:
         print(f"Error loading models: {e}")
         return
@@ -212,13 +132,12 @@ def main():
     if args.session_id:
         try:
             print(f"Fetching points for session {args.session_id} ({args.side})...")
-            # Phase 2 runs on 8080
-            api_url = f"http://localhost:8080/session-points/{args.session_id}?side={args.side}"
+            # Phase 3 runs on 8003
+            api_url = f"http://localhost:8003/session-points/{args.session_id}?side={args.side}"
             resp = requests.get(api_url, timeout=3)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("success") and data.get("points"):
-                    # Handle both list and dict formats
                     digital_pts = [(p[0], p[1]) if isinstance(p, list) else (p['x'], p['y']) for p in data["points"]]
                     print(f"✓ Successfully loaded {len(digital_pts)} custom points.")
                 else:
@@ -239,7 +158,7 @@ def main():
     last_norm_ear = None
     last_annotated = None
     last_box = None
-    
+
     while True:
         ret, frame = cap.read()
         if not ret: break
@@ -247,8 +166,12 @@ def main():
 
         # Only run detection every 3 frames for smoothness
         if frame_count % 3 == 0:
-            inference_model = detect_model if detect_model is not None else seg_model
-            last_has_ear, last_box = predict_ear_presence(frame, inference_model)
+            detect_results = detect_model.predict(source=frame, conf=CONF_THRESHOLD, verbose=False)
+            last_has_ear = len(detect_results[0].boxes) > 0
+            if last_has_ear:
+                last_box = detect_results[0].boxes[0].xyxy[0].cpu().numpy()
+            else:
+                last_box = None
 
         display_frame = frame.copy()
         
@@ -281,14 +204,14 @@ def main():
                     last_annotated = annotated
 
             if last_annotated is not None:
-                cv2.imshow("Normalized Ear (Phase 2)", last_annotated)
+                cv2.imshow("Normalized Ear (Phase 3)", last_annotated)
             
             if last_box is not None:
                 cv2.rectangle(display_frame, (int(last_box[0]), int(last_box[1])), (int(last_box[2]), int(last_box[3])), (255, 0, 0), 2)
         else:
             cv2.putText(display_frame, "Searching for ear...", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-        cv2.imshow("Phase 2 Live View", display_frame)
+        cv2.imshow("Phase 3 Live View", display_frame)
 
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'): break
