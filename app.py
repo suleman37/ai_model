@@ -676,16 +676,18 @@ async def start_live_validation(request: Request, session_id: str = Form(...), s
     if not os.path.exists(script_path):
         raise HTTPException(status_code=404, detail="live_validation.py not found")
     if not has_server_desktop():
-        raise HTTPException(
-            status_code=400,
-            detail="This API server has no desktop display. 'Integrated High-Speed Live (Local)' only works on a local machine with a GUI. Use 'Browser Webcam (Frame-by-Frame)' for deployed usage.",
-        )
+        return {
+            "success": True,
+            "mode": "browser_stream",
+            "message": "No server desktop detected. Starting browser live validation instead.",
+        }
     client_host = request.client.host if request.client else None
     if not is_loopback_host(client_host):
-        raise HTTPException(
-            status_code=400,
-            detail="This feature opens a native OpenCV window on the server desktop, not in your browser. It only works when the API and browser are running on the same local machine. For deployed usage, use 'Browser Webcam (Frame-by-Frame)'.",
-        )
+        return {
+            "success": True,
+            "mode": "browser_stream",
+            "message": "Remote client detected. Starting browser live validation instead.",
+        }
 
     try:
         def run_script():
@@ -701,7 +703,11 @@ async def start_live_validation(request: Request, session_id: str = Form(...), s
         thread.daemon = True
         thread.start()
         
-        return {"success": True, "message": "Live validation window launched on server desktop."}
+        return {
+            "success": True,
+            "mode": "server_desktop",
+            "message": "Live validation window launched on server desktop.",
+        }
     except Exception as e:
         logger.error(f"Failed to launch live validation: {e}")
         raise HTTPException(status_code=500, detail=str(e))

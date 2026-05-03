@@ -2387,6 +2387,7 @@
 
         function stopWebcam() {
             isWebcamRunning = false;
+            isHighSpeedMode = false;
             stopAutoDetectLoop();
             if (webcamStream) webcamStream.getTracks().forEach(t => t.stop());
             document.getElementById("webcamModal").classList.remove("show");
@@ -2475,11 +2476,12 @@
         // ==================== AUTO EAR DETECTION LOOP ====================
         let autoDetectTimer = null;
         let isAutoProcessing = false;
+        let isHighSpeedMode = false;
 
         function startAutoDetectLoop() {
             stopAutoDetectLoop();
             isAutoProcessing = false;
-            autoDetectTimer = setInterval(autoDetectAndValidate, 500);
+            autoDetectTimer = setInterval(autoDetectAndValidate, isHighSpeedMode ? 100 : 500);
         }
 
         function stopAutoDetectLoop() {
@@ -2553,8 +2555,8 @@
             }
 
             if (btn) btn.disabled = false;
-            // Wait a bit before next auto-detect cycle
-            setTimeout(() => { isAutoProcessing = false; }, 1000);
+            const resetDelay = isHighSpeedMode ? 100 : 1000;
+            setTimeout(() => { isAutoProcessing = false; }, resetDelay);
         }
 
 
@@ -2575,6 +2577,14 @@
                 if (!result.success) {
                     throw new Error(result.detail || result.message || "Failed to launch local live validation");
                 }
+
+                if (result.mode === "browser_stream") {
+                    isHighSpeedMode = true;
+                    showToast(result.message || "Launching high-speed browser validation.", "info");
+                    openWebcam();
+                    return;
+                }
+
                 showToast(result.message, "success");
             } catch (err) {
                 showToast(err.message || `Failed to launch local live validation: ${err}`, "error");
