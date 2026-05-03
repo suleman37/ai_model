@@ -1253,8 +1253,17 @@
             }
             if (explicitApiUrl) return explicitApiUrl.replace(/\/+$/, "");
 
-            const { protocol, hostname } = window.location;
+            const { protocol, hostname, origin, port } = window.location;
             if ((protocol === "http:" || protocol === "https:") && hostname) {
+                const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1";
+
+                // When the app is served by the API itself or behind a proxy/domain,
+                // use the current page origin so requests follow the same working route.
+                if (!isLocalHost || !port || port === API_PORT || port === "80" || port === "443") {
+                    return origin;
+                }
+
+                // Local frontend dev servers still need to target the FastAPI port.
                 return `${protocol}//${hostname}:${API_PORT}`;
             }
 
