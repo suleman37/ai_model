@@ -2,7 +2,7 @@
 # PHASE 3 — Pattern Detection & Validation API
 # ==========================================================
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
 import uvicorn
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +15,7 @@ import numpy as np
 import base64
 import io
 import importlib.util
+import ipaddress
 import os
 import sys
 import tempfile
@@ -116,6 +117,27 @@ class MirrorRequest(BaseModel):
 def _round_float(value: float, ndigits: int) -> float:
     multiplier = 10 ** ndigits
     return float(int(value * multiplier + 0.5)) / multiplier
+
+
+def has_server_desktop():
+    return bool(
+        os.environ.get("DISPLAY")
+        or os.environ.get("WAYLAND_DISPLAY")
+        or sys.platform.startswith("win")
+        or sys.platform == "darwin"
+    )
+
+
+def is_loopback_host(host: str | None) -> bool:
+    if not host:
+        return False
+    normalized = host.split("%", 1)[0]
+    if normalized in {"localhost", "::1", "127.0.0.1"}:
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
 
 
 def image_to_base64(image_array):
@@ -646,13 +668,24 @@ async def delete_session(session_id: str):
 # Standalone Live Mode Launcher
 # ----------------------------------------------------------
 @app.post("/start-live-validation")
-async def start_live_validation(session_id: str = Form(...), side: str = Form("left")):
+async def start_live_validation(request: Request, session_id: str = Form(...), side: str = Form("left")):
     """
     Launches the standalone live_validation.py script for Phase 3 with session data.
     """
     script_path = os.path.join(BASE_DIR, "live_validation.py")
     if not os.path.exists(script_path):
         raise HTTPException(status_code=404, detail="live_validation.py not found")
+    if not has_server_desktop():
+        raise HTTPException(
+            status_code=400,
+            detail="This API server has no desktop display. 'Integrated High-Speed Live (Local)' only works on a local machine with a GUI. Use 'Browser Webcam (Frame-by-Frame)' for deployed usage.",
+        )
+    client_host = request.client.host if request.client else None
+    if not is_loopback_host(client_host):
+        raise HTTPException(
+            status_code=400,
+            detail="This feature opens a native OpenCV window on the server desktop, not in your browser. It only works when the API and browser are running on the same local machine. For deployed usage, use 'Browser Webcam (Frame-by-Frame)'.",
+        )
 
     try:
         def run_script():
