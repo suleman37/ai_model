@@ -1239,7 +1239,33 @@
 
     <script>
         // ==================== CONFIG ====================
-        const API_URL = "http://localhost:8003";
+        const API_PORT = "8003";
+
+        function resolveApiUrl() {
+            const params = new URLSearchParams(window.location.search);
+            let explicitApiUrl = params.get("api");
+            if (!explicitApiUrl) {
+                try {
+                    explicitApiUrl = window.localStorage.getItem("apiBaseUrl");
+                } catch (err) {
+                    console.warn("localStorage unavailable, using inferred API host", err);
+                }
+            }
+            if (explicitApiUrl) return explicitApiUrl.replace(/\/+$/, "");
+
+            const { protocol, hostname } = window.location;
+            if ((protocol === "http:" || protocol === "https:") && hostname) {
+                return `${protocol}//${hostname}:${API_PORT}`;
+            }
+
+            // `file://` and mobile webviews need a fallback host.
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            return isAndroid
+                ? `http://10.0.2.2:${API_PORT}`
+                : `http://localhost:${API_PORT}`;
+        }
+
+        const API_URL = resolveApiUrl();
         const IMAGE_SIZE = 256;
         const DISPLAY_SIZE = 384;
 
@@ -2508,7 +2534,9 @@
                 const resp = await fetch(`${API_URL}/`);
                 if (resp.ok) console.log("✓ Phase 2 API is running");
                 else showToast("⚠️ API not responding. Start: python app.py", "error");
-            } catch { showToast("⚠️ Cannot connect to API on port 8080", "error"); }
+            } catch {
+                showToast(`⚠️ Cannot connect to API at ${API_URL}`, "error");
+            }
         });
     </script>
 </body>
