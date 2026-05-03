@@ -1241,7 +1241,9 @@
         // ==================== CONFIG ====================
         const API_PORT = "8003";
 
-        function resolveApiUrl() {
+        let cachedApiUrl = null;
+
+        function getConfiguredApiUrl() {
             const params = new URLSearchParams(window.location.search);
             let explicitApiUrl = params.get("api");
             if (!explicitApiUrl) {
@@ -1251,30 +1253,70 @@
                     console.warn("localStorage unavailable, using inferred API host", err);
                 }
             }
-            if (explicitApiUrl) return explicitApiUrl.replace(/\/+$/, "");
+            return explicitApiUrl ? explicitApiUrl.replace(/\/+$/, "") : null;
+        }
 
+        function getApiCandidates() {
             const { protocol, hostname, origin, port } = window.location;
+            const configuredApiUrl = getConfiguredApiUrl();
+            const candidates = [];
+
+            if (cachedApiUrl) candidates.push(cachedApiUrl);
+            if (configuredApiUrl) candidates.push(configuredApiUrl);
             if ((protocol === "http:" || protocol === "https:") && hostname) {
                 const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1";
 
                 // When the app is served by the API itself or behind a proxy/domain,
                 // use the current page origin so requests follow the same working route.
                 if (!isLocalHost || !port || port === API_PORT || port === "80" || port === "443") {
-                    return origin;
+                    candidates.push(origin);
+                    candidates.push(`${protocol}//${hostname}:${API_PORT}`);
+                } else {
+                    // Local frontend dev servers still need to target the FastAPI port.
+                    candidates.push(`${protocol}//${hostname}:${API_PORT}`);
+                    candidates.push(origin);
                 }
-
-                // Local frontend dev servers still need to target the FastAPI port.
-                return `${protocol}//${hostname}:${API_PORT}`;
             }
 
             // `file://` and mobile webviews need a fallback host.
             const isAndroid = /Android/i.test(navigator.userAgent);
-            return isAndroid
-                ? `http://10.0.2.2:${API_PORT}`
-                : `http://localhost:${API_PORT}`;
+            candidates.push(isAndroid ? `http://10.0.2.2:${API_PORT}` : `http://localhost:${API_PORT}`);
+
+            return [...new Set(candidates.filter(Boolean))];
         }
 
-        const API_URL = resolveApiUrl();
+        function shouldRetryApiStatus(status) {
+            return [404, 405, 421, 425, 426, 502, 503, 504].includes(status);
+        }
+
+        function joinApiUrl(baseUrl, path) {
+            const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+            return `${baseUrl.replace(/\/+$/, "")}${normalizedPath}`;
+        }
+
+        async function apiFetch(path, options = {}) {
+            const candidates = getApiCandidates();
+            let lastError = null;
+            let lastResponse = null;
+
+            for (const baseUrl of candidates) {
+                try {
+                    const response = await fetch(joinApiUrl(baseUrl, path), options);
+                    if (!shouldRetryApiStatus(response.status)) {
+                        cachedApiUrl = baseUrl;
+                        return response;
+                    }
+                    lastResponse = response;
+                } catch (error) {
+                    lastError = error;
+                }
+            }
+
+            if (lastResponse) return lastResponse;
+            throw lastError || new Error(`Unable to reach API. Tried: ${candidates.join(", ")}`);
+        }
+
+        const API_URL = getApiCandidates()[0];
         const IMAGE_SIZE = 256;
         const DISPLAY_SIZE = 384;
 
@@ -1561,7 +1603,7 @@
 
             try {
                 showLoading("Segmenting ears & detecting blue points...");
-                const resp = await fetch(`${API_URL}/segment`, { method: "POST", body: formData });
+                const resp = await apiFetch("/segment", { method: "POST", body: formData });
                 if (!resp.ok) { const e = await resp.json(); throw new Error(e.detail || "Segmentation failed"); }
 
                 const result = await resp.json();
@@ -2217,7 +2259,7 @@
 
             try {
                 showLoading("Mirroring landmarks & calculating distances...");
-                const resp = await fetch(`${API_URL}/mirror-and-measure`, {
+                const resp = await apiFetch("/mirror-and-measure", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload),
@@ -2379,7 +2421,7 @@
                 formData.append("ear_side", currentEarSide);
 
                 try {
-                    const resp = await fetch(`${API_URL}/validate-frame`, { method: "POST", body: formData });
+                    const resp = await apiFetch("/validate-frame", { method: "POST", body: formData });
                     if (!resp.ok) { showToast("API error in validation", "error"); btn.innerHTML = "📸 Capture & Analyze Snapshot"; btn.disabled = false; return; }
 
                     const result = await resp.json();
@@ -2470,7 +2512,7 @@
             try {
                 const detectForm = new FormData();
                 detectForm.append("file", blob, "detect.jpg");
-                const detectResp = await fetch(`${API_URL}/detect-ear`, { method: "POST", body: detectForm });
+                const detectResp = await apiFetch("/detect-ear", { method: "POST", body: detectForm });
                 if (!detectResp.ok) return;
                 const detectResult = await detectResp.json();
 
@@ -2490,7 +2532,7 @@
                 valForm.append("ear_side", currentEarSide);
                 lastCapturedBlob = blob;
 
-                const resp = await fetch(`${API_URL}/validate-frame`, { method: "POST", body: valForm });
+                const resp = await apiFetch("/validate-frame", { method: "POST", body: valForm });
                 if (!resp.ok) {
                     if (btn) { btn.innerHTML = "📸 Capture & Analyze Snapshot"; btn.disabled = false; }
                     isAutoProcessing = false;
@@ -2525,7 +2567,7 @@
                 const formData = new FormData();
                 formData.append("session_id", sessionId);
                 formData.append("side", currentEarSide || 'left');
-                const resp = await fetch(`${API_URL}/start-live-validation`, { method: "POST", body: formData });
+                const resp = await apiFetch("/start-live-validation", { method: "POST", body: formData });
                 const result = await resp.json();
                 if (result.success) {
                     showToast(result.message, "success");
@@ -2540,7 +2582,7 @@
         // ==================== HEALTH CHECK ====================
         window.addEventListener("load", async () => {
             try {
-                const resp = await fetch(`${API_URL}/`);
+                const resp = await apiFetch("/");
                 if (resp.ok) console.log("✓ Phase 2 API is running");
                 else showToast("⚠️ API not responding. Start: python app.py", "error");
             } catch {
