@@ -1337,16 +1337,25 @@
 
         function updateLiveLaunchButtonState() {
             const browserBtn = document.getElementById("openWebcamBtn");
+            const liveBtn = document.getElementById("launchLocalLiveBtn");
             if (!browserBtn) return;
 
             if (pendingMobileLiveLaunch) {
-                browserBtn.innerHTML = "📱 Tap To Start Camera";
-                browserBtn.style.boxShadow = "0 0 0 3px rgba(59,130,246,0.25)";
+                browserBtn.innerHTML = "📱 Browser Camera Ready";
+                browserBtn.style.boxShadow = "";
+                if (liveBtn) {
+                    liveBtn.innerHTML = "⚡ Auto Starting High-Speed Live...";
+                    liveBtn.style.boxShadow = "0 0 0 3px rgba(16,185,129,0.28)";
+                }
                 return;
             }
 
             browserBtn.innerHTML = "🌐 Browser Webcam (Frame-by-Frame)";
             browserBtn.style.boxShadow = "";
+            if (liveBtn) {
+                liveBtn.innerHTML = "⚡ Integrated High-Speed Live (Local)";
+                liveBtn.style.boxShadow = "";
+            }
         }
 
         async function restoreLiveSessionFromUrl() {
@@ -1373,7 +1382,14 @@
                     if (isMobileClient()) {
                         pendingMobileLiveLaunch = true;
                         updateLiveLaunchButtonState();
-                        showToast("Tap 'Tap To Start Camera' once to allow browser camera permission.", "info");
+                        setTimeout(() => {
+                            launchLocalLive().catch((launchErr) => {
+                                console.error("Mobile auto live launch failed:", launchErr);
+                                pendingMobileLiveLaunch = true;
+                                updateLiveLaunchButtonState();
+                                showToast("If camera does not open automatically, tap 'Integrated High-Speed Live (Local)'.", "info");
+                            });
+                        }, 250);
                     } else {
                         isHighSpeedMode = true;
                         await openWebcam();
