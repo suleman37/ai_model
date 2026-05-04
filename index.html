@@ -2490,10 +2490,15 @@
                 startAutoDetectLoop();
                 showToast("Webcam started — align ear and capture", "success");
             } catch (err) {
-                const mobileHint = isMobileClient()
-                    ? " Allow camera permission in the mobile app/WebView and open this page over HTTPS."
-                    : "";
-                showToast("Camera access denied: " + err.message + mobileHint, "error");
+                const errorName = err && err.name ? String(err.name) : "";
+                if (isMobileClient() && ["NotAllowedError", "PermissionDeniedError", "SecurityError"].includes(errorName)) {
+                    pendingMobileLiveLaunch = true;
+                    updateLiveLaunchButtonState();
+                    showToast("Tap 'Integrated High-Speed Live (Local)' and allow camera to continue.", "info");
+                    return;
+                }
+
+                showToast("Unable to start camera right now. Please try again.", "error");
             }
         }
 
