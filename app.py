@@ -855,7 +855,8 @@ async def validate_frame(
             "overall_accuracy":   overall_accuracy,
             "detected_markers":   len(used),
             "total_points":       len(digital_pts),
-            "status": ("Excellent" if overall_accuracy > 90
+            "status": ("Perfect Validation" if overall_accuracy >= 99
+                       else "Excellent" if overall_accuracy > 90
                        else "Good" if overall_accuracy > 70
                        else "Needs Work"),
         },
