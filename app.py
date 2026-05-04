@@ -172,7 +172,7 @@ def build_live_launch_url(request: Request, session_id: str, side: str) -> str:
             "auto_start_live": "1",
         }
     )
-    return f"{get_request_origin(request)}/?{query}"
+    return f"{get_request_origin(request)}/live-validation?{query}"
 
 
 def build_live_launch_response(
@@ -562,6 +562,14 @@ def root():
     if os.path.exists(index_path):
         return FileResponse(index_path)
     return {"status": "ok", "message": "Phase 3 API is running", "model_loaded": model is not None}
+
+
+@app.get("/live-validation")
+def live_validation_page():
+    page_path = os.path.join(BASE_DIR, "live_validation_browser.html")
+    if os.path.exists(page_path):
+        return FileResponse(page_path)
+    raise HTTPException(status_code=404, detail="live_validation_browser.html not found")
 
 
 # ----------------------------------------------------------

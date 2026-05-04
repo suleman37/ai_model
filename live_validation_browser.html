@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Validation</title>
+    <style>
+        :root {
+            --bg: #08111f;
+            --panel: #10233b;
+            --panel-soft: #122942;
+            --text: #eef4ff;
+            --muted: #9fb3cc;
+            --blue: #3b82f6;
+            --green: #10b981;
+            --orange: #f59e0b;
+            --border: rgba(120, 162, 222, 0.22);
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background:
+                radial-gradient(circle at top, rgba(59,130,246,0.18), transparent 28%),
+                linear-gradient(180deg, #091321 0%, #08111f 100%);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        .page {
+            width: min(1120px, calc(100vw - 24px));
+            margin: 0 auto;
+            padding: 18px 0 36px;
+        }
+
+        .hero, .panel, .stats, .toast {
+            border: 1px solid var(--border);
+            border-radius: 22px;
+            background: rgba(11, 25, 43, 0.92);
+            backdrop-filter: blur(14px);
+        }
+
+        .hero {
+            padding: 20px;
+            margin-bottom: 18px;
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: rgba(245, 158, 11, 0.14);
+            color: #ffd792;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            margin: 14px 0 8px;
+            font-size: clamp(28px, 4vw, 44px);
+            line-height: 1.05;
+        }
+
+        .subcopy {
+            margin: 0;
+            color: var(--muted);
+            max-width: 700px;
+            line-height: 1.6;
+        }
+
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+            margin-top: 18px;
+        }
+
+        .chip {
+            padding: 10px 14px;
+            border-radius: 999px;
+            background: rgba(59,130,246,0.12);
+            color: #bfdbfe;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .button {
+            appearance: none;
+            border: 0;
+            border-radius: 14px;
+            padding: 14px 18px;
+            font-size: 15px;
+            font-weight: 700;
+            color: white;
+            cursor: pointer;
+        }
+
+        .button.primary { background: linear-gradient(135deg, #10b981, #059669); }
+        .button.secondary { background: linear-gradient(135deg, #3b82f6, #2563eb); }
+        .button.ghost {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
+            gap: 18px;
+        }
+
+        .panel {
+            padding: 16px;
+        }
+
+        .panel h2, .stats h3 {
+            margin: 0 0 12px;
+            font-size: 18px;
+        }
+
+        .feeds {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .feed {
+            border-radius: 18px;
+            padding: 14px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .feed-label {
+            margin-bottom: 12px;
+            color: #bfd8f6;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        video, img {
+            width: 100%;
+            min-height: 260px;
+            max-height: 420px;
+            object-fit: cover;
+            border-radius: 16px;
+            background: #030812;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+
+        canvas { display: none; }
+
+        .status {
+            margin-top: 14px;
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: rgba(16, 185, 129, 0.08);
+            color: #d6fae8;
+            border: 1px solid rgba(16, 185, 129, 0.18);
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .stats {
+            padding: 16px;
+            align-self: start;
+        }
+
+        .side-toggle {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+
+        .side-btn {
+            padding: 12px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.04);
+            color: var(--text);
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .side-btn.active {
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            border-color: transparent;
+        }
+
+        .metric {
+            padding: 12px 0;
+            border-top: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .metric:first-of-type { border-top: 0; }
+        .metric-label {
+            color: var(--muted);
+            font-size: 13px;
+            margin-bottom: 5px;
+        }
+        .metric-value {
+            font-size: 17px;
+            font-weight: 700;
+        }
+
+        .report {
+            margin-top: 16px;
+            display: grid;
+            gap: 10px;
+        }
+
+        .card {
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .card strong { display: block; margin-bottom: 6px; }
+        .hint { color: var(--muted); font-size: 13px; }
+
+        .toast {
+            position: fixed;
+            left: 50%;
+            bottom: 18px;
+            transform: translateX(-50%) translateY(24px);
+            min-width: min(92vw, 520px);
+            padding: 14px 16px;
+            opacity: 0;
+            pointer-events: none;
+            transition: 180ms ease;
+            z-index: 20;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .toast.info { background: rgba(15, 118, 110, 0.96); }
+        .toast.error { background: rgba(185, 28, 28, 0.96); }
+        .toast.success { background: rgba(5, 150, 105, 0.96); }
+
+        @media (max-width: 920px) {
+            .layout { grid-template-columns: 1fr; }
+            .feeds { grid-template-columns: 1fr; }
+            video, img { min-height: 220px; }
+        }
+    </style>
+</head>
+<body>
+    <main class="page">
+        <section class="hero">
+            <span class="eyebrow">Live Validation</span>
+            <h1>Dedicated Browser Scanner</h1>
+            <p class="subcopy">This page is only for live validation. It restores the requested session, opens the camera automatically, and runs the high-speed validation loop against the saved piercing points.</p>
+            <div class="toolbar">
+                <div class="chip" id="sessionChip">Session: waiting...</div>
+                <div class="chip" id="modeChip">Mode: high-speed browser live</div>
+                <button class="button primary" id="retryBtn" type="button">Retry Camera</button>
+                <button class="button ghost" id="stopBtn" type="button">Stop Camera</button>
+            </div>
+        </section>
+
+        <section class="layout">
+            <section class="panel">
+                <h2>Live Feeds</h2>
+                <div class="feeds">
+                    <div class="feed">
+                        <div class="feed-label">Camera</div>
+                        <video id="webcamVideo" autoplay playsinline muted></video>
+                        <canvas id="captureCanvas"></canvas>
+                    </div>
+                    <div class="feed">
+                        <div class="feed-label">AI Annotated View</div>
+                        <img id="annotatedImg" alt="AI annotated frame">
+                    </div>
+                </div>
+                <div class="status" id="statusBox">Preparing live validation…</div>
+            </section>
+
+            <aside class="stats">
+                <h3>Session Control</h3>
+                <div class="side-toggle">
+                    <button class="side-btn active" id="leftBtn" type="button">Left Ear</button>
+                    <button class="side-btn" id="rightBtn" type="button">Right Ear</button>
+                </div>
+
+                <div class="metric">
+                    <div class="metric-label">Current Side</div>
+                    <div class="metric-value" id="sideValue">Left</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Overall Accuracy</div>
+                    <div class="metric-value" id="accuracyValue">0%</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Marker Status</div>
+                    <div class="metric-value" id="markerValue">Waiting for scan</div>
+                </div>
+
+                <div class="report" id="improvementGrid"></div>
+            </aside>
+        </section>
+    </main>
+
+    <div class="toast info" id="toast"></div>
+
+    <script>
+        const API_PORT = "8003";
+        let cachedApiUrl = null;
+        let sessionId = null;
+        let currentEarSide = "left";
+        let webcamStream = null;
+        let isWebcamRunning = false;
+        let autoDetectTimer = null;
+        let isAutoProcessing = false;
+        let autoStartAttempted = false;
+
+        function getConfiguredApiUrl() {
+            const params = new URLSearchParams(window.location.search);
+            let explicitApiUrl = params.get("api");
+            if (!explicitApiUrl) {
+                try {
+                    explicitApiUrl = window.localStorage.getItem("apiBaseUrl");
+                } catch (_err) {}
+            }
+            return explicitApiUrl ? explicitApiUrl.replace(/\/+$/, "") : null;
+        }
+
+        function getApiCandidates() {
+            const { protocol, hostname, origin, port } = window.location;
+            const configuredApiUrl = getConfiguredApiUrl();
+            const candidates = [];
+
+            if (cachedApiUrl) candidates.push(cachedApiUrl);
+            if (configuredApiUrl) candidates.push(configuredApiUrl);
+            if ((protocol === "http:" || protocol === "https:") && hostname) {
+                const isLocalHost = hostname === "localhost" || hostname === "127.0.0.1";
+                if (!isLocalHost || !port || port === API_PORT || port === "80" || port === "443") {
+                    candidates.push(origin);
+                    candidates.push(`${protocol}//${hostname}:${API_PORT}`);
+                } else {
+                    candidates.push(`${protocol}//${hostname}:${API_PORT}`);
+                    candidates.push(origin);
+                }
+            }
+
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            candidates.push(isAndroid ? `http://10.0.2.2:${API_PORT}` : `http://localhost:${API_PORT}`);
+            return [...new Set(candidates.filter(Boolean))];
+        }
+
+        function shouldRetryApiStatus(status) {
+            return [404, 405, 421, 425, 426, 502, 503, 504].includes(status);
+        }
+
+        function joinApiUrl(baseUrl, path) {
+            const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+            return `${baseUrl.replace(/\/+$/, "")}${normalizedPath}`;
+        }
+
+        async function apiFetch(path, options = {}) {
+            const candidates = getApiCandidates();
+            let lastError = null;
+            let lastResponse = null;
+
+            for (const baseUrl of candidates) {
+                try {
+                    const response = await fetch(joinApiUrl(baseUrl, path), options);
+                    if (!shouldRetryApiStatus(response.status)) {
+                        cachedApiUrl = baseUrl;
+                        return response;
+                    }
+                    lastResponse = response;
+                } catch (error) {
+                    lastError = error;
+                }
+            }
+
+            if (lastResponse) return lastResponse;
+            throw lastError || new Error(`Unable to reach API. Tried: ${candidates.join(", ")}`);
+        }
+
+        function isMobileClient() {
+            return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
+        }
+
+        function showToast(msg, type = "info") {
+            const t = document.getElementById("toast");
+            t.textContent = msg;
+            t.className = `toast ${type}`;
+            requestAnimationFrame(() => t.classList.add("show"));
+            setTimeout(() => t.classList.remove("show"), 3200);
+        }
+
+        function setStatus(message) {
+            document.getElementById("statusBox").textContent = message;
+        }
+
+        function setEarSide(side) {
+            currentEarSide = side === "right" ? "right" : "left";
+            document.getElementById("leftBtn").classList.toggle("active", currentEarSide === "left");
+            document.getElementById("rightBtn").classList.toggle("active", currentEarSide === "right");
+            document.getElementById("sideValue").textContent = currentEarSide === "left" ? "Left" : "Right";
+            document.getElementById("annotatedImg").src = "";
+            document.getElementById("markerValue").textContent = "Waiting for scan";
+            document.getElementById("accuracyValue").textContent = "0%";
+            document.getElementById("improvementGrid").innerHTML = "";
+        }
+
+        function startAutoDetectLoop() {
+            stopAutoDetectLoop();
+            autoDetectTimer = setInterval(autoDetectAndValidate, 100);
+        }
+
+        function stopAutoDetectLoop() {
+            if (autoDetectTimer) {
+                clearInterval(autoDetectTimer);
+                autoDetectTimer = null;
+            }
+            isAutoProcessing = false;
+        }
+
+        function stopWebcam() {
+            isWebcamRunning = false;
+            stopAutoDetectLoop();
+            if (webcamStream) {
+                webcamStream.getTracks().forEach(track => track.stop());
+                webcamStream = null;
+            }
+            const video = document.getElementById("webcamVideo");
+            if (video) video.srcObject = null;
+            setStatus("Camera stopped. Tap Retry Camera to start again.");
+        }
+
+        async function openWebcam() {
+            if (!sessionId) {
+                showToast("Session is missing.", "error");
+                return;
+            }
+
+            try {
+                stopWebcam();
+                const mobileConstraints = [
+                    { video: { width: 640, height: 480, facingMode: { ideal: "environment" } } },
+                    { video: { width: 640, height: 480, facingMode: { ideal: "user" } } },
+                    { video: { width: 640, height: 480 } },
+                ];
+                const desktopConstraints = [
+                    { video: { width: 640, height: 480, facingMode: "user" } },
+                    { video: { width: 640, height: 480 } },
+                ];
+                const candidates = isMobileClient() ? mobileConstraints : desktopConstraints;
+                let stream = null;
+                let lastError = null;
+
+                for (const constraints of candidates) {
+                    try {
+                        stream = await navigator.mediaDevices.getUserMedia(constraints);
+                        break;
+                    } catch (err) {
+                        lastError = err;
+                    }
+                }
+
+                if (!stream) {
+                    throw lastError || new Error("Unable to access camera");
+                }
+
+                webcamStream = stream;
+                document.getElementById("webcamVideo").srcObject = stream;
+                isWebcamRunning = true;
+                startAutoDetectLoop();
+                setStatus("Camera started. High-speed live validation is running.");
+                showToast("Live validation started.", "success");
+            } catch (err) {
+                setStatus("Camera could not start automatically. Use Retry Camera and allow camera permission.");
+                showToast(err && err.message ? err.message : "Unable to start camera", "error");
+            }
+        }
+
+        function showImprovementReport(result) {
+            document.getElementById("accuracyValue").textContent = `${result.summary.overall_accuracy}%`;
+            document.getElementById("markerValue").textContent = `${result.summary.detected_markers}/${result.summary.total_points} markers`;
+            document.getElementById("improvementGrid").innerHTML = result.guidance.map(item => {
+                const errMm = item.error_cm != null ? `${(item.error_cm * 10).toFixed(1)} mm` : "Not found";
+                return `
+                    <div class="card">
+                        <strong>Point ${item.point}</strong>
+                        <div>${item.correct ? "Perfect" : errMm}</div>
+                        <div class="hint">${item.message}</div>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        async function autoDetectAndValidate() {
+            if (!isWebcamRunning || !sessionId || isAutoProcessing) return;
+
+            const video = document.getElementById("webcamVideo");
+            const canvas = document.getElementById("captureCanvas");
+            if (!video || video.videoWidth === 0) return;
+
+            const ctx = canvas.getContext("2d");
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            let blob;
+            try {
+                blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.8));
+            } catch (_err) {
+                return;
+            }
+
+            if (!blob) return;
+
+            try {
+                const detectForm = new FormData();
+                detectForm.append("file", blob, "detect.jpg");
+                const detectResp = await apiFetch("/detect-ear", { method: "POST", body: detectForm });
+                if (!detectResp.ok) return;
+                const detectResult = await detectResp.json();
+                if (!detectResult.ear_detected) return;
+            } catch (_err) {
+                return;
+            }
+
+            isAutoProcessing = true;
+
+            try {
+                const valForm = new FormData();
+                valForm.append("file", blob, "frame.jpg");
+                valForm.append("session_id", sessionId);
+                valForm.append("ear_side", currentEarSide);
+
+                const resp = await apiFetch("/validate-frame", { method: "POST", body: valForm });
+                if (!resp.ok) {
+                    isAutoProcessing = false;
+                    return;
+                }
+
+                const result = await resp.json();
+                if (result.success && result.ear_detected) {
+                    document.getElementById("annotatedImg").src = `data:image/png;base64,${result.annotated_image}`;
+                    showImprovementReport(result);
+                    setStatus(`Scanning ${currentEarSide} ear. ${result.summary.status} result is live.`);
+                }
+            } catch (_err) {
+                setStatus("Live validation is waiting for the next stable frame.");
+            }
+
+            setTimeout(() => {
+                isAutoProcessing = false;
+            }, 100);
+        }
+
+        async function restoreFromLaunchUrl() {
+            const params = new URLSearchParams(window.location.search);
+            const launchSessionId = params.get("session_id");
+            if (!launchSessionId) {
+                throw new Error("Session id is missing from the launch URL.");
+            }
+
+            const launchSide = (params.get("side") || "left").toLowerCase() === "right" ? "right" : "left";
+            const resp = await apiFetch(`/session/${launchSessionId}`);
+            if (!resp.ok) {
+                throw new Error("Launch session not found");
+            }
+
+            sessionId = launchSessionId;
+            document.getElementById("sessionChip").textContent = `Session: ${sessionId}`;
+            setEarSide(launchSide);
+        }
+
+        async function boot() {
+            try {
+                await restoreFromLaunchUrl();
+                setStatus("Session restored. Starting live validation…");
+                if (!autoStartAttempted) {
+                    autoStartAttempted = true;
+                    setTimeout(() => {
+                        openWebcam().catch(() => null);
+                    }, 180);
+                }
+            } catch (err) {
+                setStatus("Unable to restore the requested live-validation session.");
+                showToast(err && err.message ? err.message : "Unable to restore live session", "error");
+            }
+        }
+
+        document.getElementById("leftBtn").addEventListener("click", () => setEarSide("left"));
+        document.getElementById("rightBtn").addEventListener("click", () => setEarSide("right"));
+        document.getElementById("retryBtn").addEventListener("click", () => {
+            openWebcam().catch(() => null);
+        });
+        document.getElementById("stopBtn").addEventListener("click", stopWebcam);
+
+        window.addEventListener("beforeunload", stopWebcam);
+        window.addEventListener("load", () => {
+            boot().catch(() => null);
+        });
+    </script>
+</body>
+</html>
