@@ -350,6 +350,30 @@
         let isAutoProcessing = false;
         let currentCameraFacing = "environment";
         let lastAnnotatedAt = 0;
+        let completionPostedFor = null;
+
+        function isRunningInsideReactNativeWebView() {
+            return !!window.ReactNativeWebView && typeof window.ReactNativeWebView.postMessage === "function";
+        }
+
+        function postLiveValidationMessage(type, payload) {
+            if (!isRunningInsideReactNativeWebView()) {
+                return;
+            }
+
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+                type,
+                ...payload,
+            }));
+        }
+
+        function isPerfectValidationResult(result) {
+            const summaryAccuracy = Number(result?.summary?.overall_accuracy ?? result?.overall_accuracy ?? 0);
+            const guidance = Array.isArray(result?.guidance) ? result.guidance : [];
+            const allPointsCorrect = guidance.length > 0 && guidance.every(item => !!item && item.correct === true);
+
+            return summaryAccuracy >= 99 || allPointsCorrect;
+        }
 
         function getConfiguredApiUrl() {
             const params = new URLSearchParams(window.location.search);
@@ -570,6 +594,27 @@
                     showImprovementReport(result);
                     lastAnnotatedAt = Date.now();
                     setStatus(`Scanning ${currentEarSide} ear. ${result.summary.status} result is live.`);
+
+                    const completionKey = `${sessionId}:${currentEarSide}:${result?.summary?.overall_accuracy ?? 0}`;
+                    if (
+                        isRunningInsideReactNativeWebView() &&
+                        isPerfectValidationResult(result) &&
+                        completionPostedFor !== completionKey
+                    ) {
+                        completionPostedFor = completionKey;
+                        stopWebcam();
+                        setStatus(`Perfect Validation captured for ${currentEarSide} ear. Preparing next step...`);
+                        setTimeout(() => {
+                            postLiveValidationMessage("live_validation_complete", {
+                                earSide: currentEarSide,
+                                payload: {
+                                    result,
+                                    earSide: currentEarSide,
+                                },
+                            });
+                        }, 700);
+                        return;
+                    }
                 } else if (Date.now() - lastAnnotatedAt > 800) {
                     setStatus(`Scanning ${currentEarSide} ear. Bring the ear inside the scanner frame.`);
                 }
