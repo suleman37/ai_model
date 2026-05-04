@@ -4,7 +4,7 @@
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
 import uvicorn
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -26,6 +26,7 @@ from ultralytics import YOLO
 from blue_point_detector import detect_blue_points, draw_detected_points
 import subprocess
 import threading
+from urllib.parse import urlencode
 
 
 # ==================== CONFIGURATION ====================
@@ -138,6 +139,122 @@ def is_loopback_host(host: str | None) -> bool:
         return ipaddress.ip_address(normalized).is_loopback
     except ValueError:
         return False
+
+
+def detect_client_platform(request: Request) -> str:
+    user_agent = request.headers.get("user-agent", "").lower()
+    mobile_markers = ("android", "iphone", "ipad", "ipod", "mobile")
+    if any(marker in user_agent for marker in mobile_markers):
+        return "mobile"
+    return "browser"
+
+
+def get_request_origin(request: Request) -> str:
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host")
+    host = forwarded_host or request.headers.get("host")
+
+    if host:
+        return f"{forwarded_proto or request.url.scheme}://{host}"
+
+    port = f":{request.url.port}" if request.url.port else ""
+    return f"{forwarded_proto or request.url.scheme}://{request.url.hostname}{port}"
+
+
+def build_live_launch_url(request: Request, session_id: str, side: str) -> str:
+    query = urlencode(
+        {
+            "session_id": session_id,
+            "side": side,
+            "auto_start_live": "1",
+        }
+    )
+    return f"{get_request_origin(request)}/?{query}"
+
+
+def build_live_launch_response(
+    request: Request,
+    session_id: str,
+    side: str,
+    preferred_mode: str,
+) -> dict[str, Any]:
+    preferred_mode = (preferred_mode or "auto").strip().lower()
+    if preferred_mode not in {"auto", "server_desktop", "browser", "mobile"}:
+        preferred_mode = "auto"
+
+    client_host = request.client.host if request.client else None
+    client_platform = detect_client_platform(request)
+    resolved_side = "right" if str(side).lower() == "right" else "left"
+    launch_url = build_live_launch_url(request, session_id, resolved_side)
+
+    fallback_mode = "mobile_browser_stream" if (
+        preferred_mode == "mobile" or client_platform == "mobile"
+    ) else "browser_stream"
+
+    if preferred_mode == "browser":
+        return {
+            "success": True,
+            "mode": "browser_stream",
+            "launch_strategy": "open_url",
+            "launch_url": launch_url,
+            "client_platform": client_platform,
+            "preferred_mode": preferred_mode,
+            "message": "Browser live validation is ready.",
+        }
+
+    if preferred_mode == "mobile":
+        return {
+            "success": True,
+            "mode": "mobile_browser_stream",
+            "launch_strategy": "open_url",
+            "launch_url": launch_url,
+            "client_platform": client_platform,
+            "preferred_mode": preferred_mode,
+            "message": "Mobile live validation is ready. Open the returned URL inside the app WebView or mobile browser.",
+        }
+
+    if not has_server_desktop():
+        return {
+            "success": True,
+            "mode": fallback_mode,
+            "launch_strategy": "open_url",
+            "launch_url": launch_url,
+            "client_platform": client_platform,
+            "preferred_mode": preferred_mode,
+            "message": "Server desktop not available. Open live validation in the browser or mobile app.",
+        }
+
+    if preferred_mode != "server_desktop" and not is_loopback_host(client_host):
+        return {
+            "success": True,
+            "mode": fallback_mode,
+            "launch_strategy": "open_url",
+            "launch_url": launch_url,
+            "client_platform": client_platform,
+            "preferred_mode": preferred_mode,
+            "message": "Remote client detected. Open live validation using the returned URL.",
+        }
+
+    if preferred_mode == "server_desktop" and not is_loopback_host(client_host):
+        return {
+            "success": True,
+            "mode": fallback_mode,
+            "launch_strategy": "open_url",
+            "launch_url": launch_url,
+            "client_platform": client_platform,
+            "preferred_mode": preferred_mode,
+            "message": "Server desktop launch requires a local request. Open the returned URL instead.",
+        }
+
+    return {
+        "success": True,
+        "mode": "server_desktop",
+        "launch_strategy": "server_window",
+        "launch_url": launch_url,
+        "client_platform": client_platform,
+        "preferred_mode": preferred_mode,
+        "message": "Live validation window launched on server desktop.",
+    }
 
 
 def image_to_base64(image_array):
@@ -668,49 +785,60 @@ async def delete_session(session_id: str):
 # Standalone Live Mode Launcher
 # ----------------------------------------------------------
 @app.post("/start-live-validation")
-async def start_live_validation(request: Request, session_id: str = Form(...), side: str = Form("left")):
+async def start_live_validation(
+    request: Request,
+    session_id: str = Form(...),
+    side: str = Form("left"),
+    preferred_mode: str = Form("auto"),
+):
     """
     Launches the standalone live_validation.py script for Phase 3 with session data.
     """
     script_path = os.path.join(BASE_DIR, "live_validation.py")
     if not os.path.exists(script_path):
         raise HTTPException(status_code=404, detail="live_validation.py not found")
-    if not has_server_desktop():
-        return {
-            "success": True,
-            "mode": "browser_stream",
-            "message": "No server desktop detected. Starting browser live validation instead.",
-        }
-    client_host = request.client.host if request.client else None
-    if not is_loopback_host(client_host):
-        return {
-            "success": True,
-            "mode": "browser_stream",
-            "message": "Remote client detected. Starting browser live validation instead.",
-        }
+    launch_response = build_live_launch_response(request, session_id, side, preferred_mode)
+    resolved_side = "right" if str(side).lower() == "right" else "left"
 
     try:
+        if launch_response["mode"] != "server_desktop":
+            return launch_response
+
         def run_script():
             try:
                 subprocess.run(
-                    [sys.executable, script_path, "--session_id", session_id, "--side", side],
+                    [sys.executable, script_path, "--session_id", session_id, "--side", resolved_side],
                     check=True,
                 )
             except subprocess.CalledProcessError as exc:
                 logger.error(f"Live validation exited with status {exc.returncode}")
-        
+
         thread = threading.Thread(target=run_script)
         thread.daemon = True
         thread.start()
-        
-        return {
-            "success": True,
-            "mode": "server_desktop",
-            "message": "Live validation window launched on server desktop.",
-        }
+
+        return launch_response
     except Exception as e:
         logger.error(f"Failed to launch live validation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/start-live-validation")
+async def start_live_validation_redirect(
+    request: Request,
+    session_id: str,
+    side: str = "left",
+    preferred_mode: str = "mobile",
+):
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    launch_response = build_live_launch_response(request, session_id, side, preferred_mode)
+    launch_url = launch_response.get("launch_url")
+    if not launch_url:
+        raise HTTPException(status_code=500, detail="Unable to build launch URL")
+
+    return RedirectResponse(url=launch_url, status_code=307)
 
 
 # ==================== LIGHTWEIGHT EAR DETECTION (AUTO-VALIDATION) ====================

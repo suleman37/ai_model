@@ -1320,6 +1320,50 @@
         const IMAGE_SIZE = 256;
         const DISPLAY_SIZE = 384;
 
+        function isMobileClient() {
+            return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
+        }
+
+        function getPreferredLiveMode() {
+            return isMobileClient() ? "mobile" : "browser";
+        }
+
+        function clearAutoStartFlag() {
+            const url = new URL(window.location.href);
+            if (!url.searchParams.has("auto_start_live")) return;
+            url.searchParams.delete("auto_start_live");
+            window.history.replaceState({}, document.title, url.toString());
+        }
+
+        async function restoreLiveSessionFromUrl() {
+            const params = new URLSearchParams(window.location.search);
+            const launchSessionId = params.get("session_id");
+            if (!launchSessionId) return;
+
+            const launchSide = (params.get("side") || "left").toLowerCase() === "right" ? "right" : "left";
+            const shouldAutoStart = ["1", "true", "yes"].includes((params.get("auto_start_live") || "").toLowerCase());
+
+            try {
+                const resp = await apiFetch(`/session/${launchSessionId}`);
+                if (!resp.ok) {
+                    throw new Error("Launch session not found");
+                }
+
+                sessionId = launchSessionId;
+                setGlobalEarSide(launchSide);
+                setStep(4);
+                showToast("Live validation session restored.", "success");
+
+                if (shouldAutoStart) {
+                    clearAutoStartFlag();
+                    isHighSpeedMode = true;
+                    await openWebcam();
+                }
+            } catch (err) {
+                showToast(err.message || "Unable to restore live validation session", "error");
+            }
+        }
+
         // ==================== STATE ====================
         let rightFile = null;
         let leftFile = null;
@@ -2381,7 +2425,10 @@
                 startAutoDetectLoop();
                 showToast("Webcam started — align ear and capture", "success");
             } catch (err) {
-                showToast("Camera access denied: " + err.message, "error");
+                const mobileHint = isMobileClient()
+                    ? " Allow camera permission in the mobile app/WebView and open this page over HTTPS."
+                    : "";
+                showToast("Camera access denied: " + err.message + mobileHint, "error");
             }
         }
 
@@ -2569,6 +2616,7 @@
                 const formData = new FormData();
                 formData.append("session_id", sessionId);
                 formData.append("side", currentEarSide || 'left');
+                formData.append("preferred_mode", getPreferredLiveMode());
                 const resp = await apiFetch("/start-live-validation", { method: "POST", body: formData });
                 const result = await resp.json().catch(() => ({}));
                 if (!resp.ok) {
@@ -2578,10 +2626,10 @@
                     throw new Error(result.detail || result.message || "Failed to launch local live validation");
                 }
 
-                if (result.mode === "browser_stream") {
+                if (result.mode === "browser_stream" || result.mode === "mobile_browser_stream") {
                     isHighSpeedMode = true;
                     showToast(result.message || "Launching high-speed browser validation.", "info");
-                    openWebcam();
+                    await openWebcam();
                     return;
                 }
 
@@ -2600,6 +2648,8 @@
             } catch {
                 showToast(`⚠️ Cannot connect to API at ${API_URL}`, "error");
             }
+
+            await restoreLiveSessionFromUrl();
         });
     </script>
 </body>
