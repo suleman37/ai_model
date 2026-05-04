@@ -41,14 +41,6 @@
             backdrop-filter: blur(14px);
         }
 
-        .toolbar {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            align-items: center;
-            margin-bottom: 16px;
-        }
-
         .chip {
             padding: 10px 14px;
             border-radius: 999px;
@@ -61,12 +53,13 @@
         .button {
             appearance: none;
             border: 0;
-            border-radius: 14px;
+            border-radius: 8px;
             padding: 14px 18px;
             font-size: 15px;
             font-weight: 700;
             color: white;
             cursor: pointer;
+            width: 100%;
         }
 
         .button.primary { background: linear-gradient(135deg, #10b981, #059669); }
@@ -137,28 +130,22 @@
             line-height: 1.5;
         }
 
-        .side-toggle {
+        .actions {
+            margin-top: 16px;
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 10px;
-            width: min(280px, 100%);
-        }
-
-        .camera-toggle {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
-            width: min(280px, 100%);
         }
 
         .side-btn {
             padding: 12px;
-            border-radius: 14px;
+            border-radius: 8px;
             border: 1px solid var(--border);
             background: rgba(255,255,255,0.04);
             color: var(--text);
             font-weight: 700;
             cursor: pointer;
+            width: 100%;
         }
 
         .side-btn.active {
@@ -218,19 +205,6 @@
 <body>
     <main class="page">
         <section class="panel">
-            <div class="toolbar">
-                <div class="side-toggle">
-                    <button class="side-btn active" id="leftBtn" type="button">Left Ear</button>
-                    <button class="side-btn" id="rightBtn" type="button">Right Ear</button>
-                </div>
-                <div class="camera-toggle">
-                    <button class="side-btn" id="cameraFrontBtn" type="button">Front Cam</button>
-                    <button class="side-btn active" id="cameraBackBtn" type="button">Back Cam</button>
-                </div>
-                <button class="button primary" id="retryBtn" type="button">Start Camera</button>
-                <button class="button ghost" id="stopBtn" type="button">Stop Camera</button>
-            </div>
-
             <div class="feeds">
                 <div class="feed">
                     <div class="feed-label">Camera</div>
@@ -244,6 +218,14 @@
             </div>
             <div class="status" id="statusBox">Preparing live validation…</div>
             <div class="report" id="improvementGrid"></div>
+            <div class="actions">
+                <button class="side-btn active" id="leftBtn" type="button">Left Ear</button>
+                <button class="side-btn" id="rightBtn" type="button">Right Ear</button>
+                <button class="side-btn" id="cameraFrontBtn" type="button">Front Cam</button>
+                <button class="side-btn active" id="cameraBackBtn" type="button">Back Cam</button>
+                <button class="button primary" id="retryBtn" type="button">Start Camera</button>
+                <button class="button ghost" id="stopBtn" type="button">Stop Camera</button>
+            </div>
         </section>
     </main>
 
