@@ -29,9 +29,9 @@
         }
 
         .page {
-            width: min(1120px, calc(100vw - 24px));
+            width: min(1240px, calc(100vw - 8px));
             margin: 0 auto;
-            padding: 18px 0 36px;
+            padding: 10px 0 28px;
         }
 
         .hero, .panel, .stats, .toast {
@@ -146,8 +146,9 @@
 
         video, img {
             width: 100%;
-            min-height: 260px;
-            max-height: 420px;
+            min-height: 380px;
+            max-height: 620px;
+            aspect-ratio: 1 / 1.12;
             object-fit: cover;
             border-radius: 16px;
             background: #030812;
@@ -175,6 +176,13 @@
         .side-toggle {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+
+        .camera-toggle {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 10px;
             margin-bottom: 14px;
         }
@@ -251,7 +259,12 @@
         @media (max-width: 920px) {
             .layout { grid-template-columns: 1fr; }
             .feeds { grid-template-columns: 1fr; }
-            video, img { min-height: 220px; }
+            .page { width: min(100vw, calc(100vw - 4px)); padding: 6px 0 18px; }
+            .hero, .panel, .stats { border-radius: 16px; }
+            video, img {
+                min-height: 470px;
+                max-height: 76vh;
+            }
         }
     </style>
 </head>
@@ -292,10 +305,19 @@
                     <button class="side-btn active" id="leftBtn" type="button">Left Ear</button>
                     <button class="side-btn" id="rightBtn" type="button">Right Ear</button>
                 </div>
+                <div class="camera-toggle">
+                    <button class="side-btn active" id="cameraAutoBtn" type="button">Auto Cam</button>
+                    <button class="side-btn" id="cameraFrontBtn" type="button">Front Cam</button>
+                    <button class="side-btn" id="cameraBackBtn" type="button">Back Cam</button>
+                </div>
 
                 <div class="metric">
                     <div class="metric-label">Current Side</div>
                     <div class="metric-value" id="sideValue">Left</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Camera Mode</div>
+                    <div class="metric-value" id="cameraValue">Auto</div>
                 </div>
                 <div class="metric">
                     <div class="metric-label">Overall Accuracy</div>
@@ -323,6 +345,7 @@
         let autoDetectTimer = null;
         let isAutoProcessing = false;
         let autoStartAttempted = false;
+        let currentCameraFacing = "auto";
 
         function getConfiguredApiUrl() {
             const params = new URLSearchParams(window.location.search);
@@ -416,6 +439,16 @@
             document.getElementById("improvementGrid").innerHTML = "";
         }
 
+        function setCameraFacing(mode) {
+            currentCameraFacing = ["user", "environment"].includes(mode) ? mode : "auto";
+            document.getElementById("cameraAutoBtn").classList.toggle("active", currentCameraFacing === "auto");
+            document.getElementById("cameraFrontBtn").classList.toggle("active", currentCameraFacing === "user");
+            document.getElementById("cameraBackBtn").classList.toggle("active", currentCameraFacing === "environment");
+            document.getElementById("cameraValue").textContent =
+                currentCameraFacing === "user" ? "Front" :
+                currentCameraFacing === "environment" ? "Back" : "Auto";
+        }
+
         function startAutoDetectLoop() {
             stopAutoDetectLoop();
             autoDetectTimer = setInterval(autoDetectAndValidate, 100);
@@ -449,16 +482,23 @@
 
             try {
                 stopWebcam();
-                const mobileConstraints = [
+                const autoMobileConstraints = [
                     { video: { width: 640, height: 480, facingMode: { ideal: "environment" } } },
                     { video: { width: 640, height: 480, facingMode: { ideal: "user" } } },
                     { video: { width: 640, height: 480 } },
                 ];
-                const desktopConstraints = [
+                const autoDesktopConstraints = [
                     { video: { width: 640, height: 480, facingMode: "user" } },
                     { video: { width: 640, height: 480 } },
                 ];
-                const candidates = isMobileClient() ? mobileConstraints : desktopConstraints;
+                const explicitConstraints = currentCameraFacing === "auto"
+                    ? null
+                    : [
+                        { video: { width: 640, height: 480, facingMode: { exact: currentCameraFacing } } },
+                        { video: { width: 640, height: 480, facingMode: { ideal: currentCameraFacing } } },
+                        { video: { width: 640, height: 480 } },
+                    ];
+                const candidates = explicitConstraints || (isMobileClient() ? autoMobileConstraints : autoDesktopConstraints);
                 let stream = null;
                 let lastError = null;
 
@@ -599,6 +639,18 @@
 
         document.getElementById("leftBtn").addEventListener("click", () => setEarSide("left"));
         document.getElementById("rightBtn").addEventListener("click", () => setEarSide("right"));
+        document.getElementById("cameraAutoBtn").addEventListener("click", () => {
+            setCameraFacing("auto");
+            openWebcam().catch(() => null);
+        });
+        document.getElementById("cameraFrontBtn").addEventListener("click", () => {
+            setCameraFacing("user");
+            openWebcam().catch(() => null);
+        });
+        document.getElementById("cameraBackBtn").addEventListener("click", () => {
+            setCameraFacing("environment");
+            openWebcam().catch(() => null);
+        });
         document.getElementById("retryBtn").addEventListener("click", () => {
             openWebcam().catch(() => null);
         });
