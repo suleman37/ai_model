@@ -16,6 +16,7 @@ import base64
 import io
 import importlib.util
 import ipaddress
+import json
 import os
 import sys
 import tempfile
@@ -36,6 +37,7 @@ IMAGE_SIZE          = 256
 PIXELS_PER_CM       = 100
 CONFIDENCE_THRESHOLD = 0.25
 MASK_THRESHOLD      = 0.5
+SESSIONS_FILE = os.path.join(tempfile.gettempdir(), "phase3_live_sessions.json")
 
 # ==================== LOGGING ====================
 logging.basicConfig(level=logging.INFO)
@@ -101,6 +103,7 @@ load_model_on_startup()
 
 # ==================== SESSION STORE ====================
 sessions: Dict[str, Any] = {}
+sessions_lock = threading.Lock()
 
 # ==================== PYDANTIC MODELS ====================
 class Point(BaseModel):
@@ -266,6 +269,103 @@ def image_to_base64(image_array):
     buffered = io.BytesIO()
     pil_image.save(buffered, format="PNG")
     return base64.b64encode(buffered.getvalue()).decode()
+
+
+def base64_to_image(image_base64: str):
+    image_bytes = base64.b64decode(image_base64)
+    np_buffer = np.frombuffer(image_bytes, np.uint8)
+    image = cv2.imdecode(np_buffer, cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("Invalid persisted image data")
+    return image
+
+
+def serialize_session(session: Dict[str, Any]) -> Dict[str, Any]:
+    serialized: Dict[str, Any] = {}
+    for key, value in session.items():
+        if isinstance(value, np.ndarray):
+            serialized[key] = {
+                "__type__": "image_base64",
+                "value": image_to_base64(value),
+            }
+        elif isinstance(value, tuple):
+            serialized[key] = list(value)
+        elif isinstance(value, list):
+            serialized[key] = [list(item) if isinstance(item, tuple) else item for item in value]
+        else:
+            serialized[key] = value
+    return serialized
+
+
+def deserialize_session(session: Dict[str, Any]) -> Dict[str, Any]:
+    deserialized: Dict[str, Any] = {}
+    for key, value in session.items():
+        if (
+            isinstance(value, dict)
+            and value.get("__type__") == "image_base64"
+            and "value" in value
+        ):
+            deserialized[key] = base64_to_image(value["value"])
+        elif key in {"left_points", "right_points"} and isinstance(value, list):
+            deserialized[key] = [tuple(item) if isinstance(item, list) else item for item in value]
+        else:
+            deserialized[key] = value
+    return deserialized
+
+
+def load_sessions_from_disk() -> Dict[str, Any]:
+    if not os.path.exists(SESSIONS_FILE):
+        return {}
+    try:
+        with open(SESSIONS_FILE, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+        return {
+            session_id: deserialize_session(session_data)
+            for session_id, session_data in raw.items()
+        }
+    except Exception as exc:
+        logger.warning(f"Failed to load persisted sessions: {exc}")
+        return {}
+
+
+def save_sessions_to_disk(session_map: Dict[str, Any]) -> None:
+    tmp_path = f"{SESSIONS_FILE}.tmp"
+    serialized = {
+        session_id: serialize_session(session_data)
+        for session_id, session_data in session_map.items()
+    }
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(serialized, fh)
+    os.replace(tmp_path, SESSIONS_FILE)
+
+
+def get_session_entry(session_id: str) -> Dict[str, Any] | None:
+    with sessions_lock:
+        persisted = load_sessions_from_disk()
+        if session_id in persisted:
+            sessions[session_id] = persisted[session_id]
+            return sessions[session_id]
+        return sessions.get(session_id)
+
+
+def set_session_entry(session_id: str, session_data: Dict[str, Any]) -> None:
+    with sessions_lock:
+        sessions[session_id] = session_data
+        persisted = load_sessions_from_disk()
+        persisted[session_id] = session_data
+        save_sessions_to_disk(persisted)
+
+
+def delete_session_entry(session_id: str) -> bool:
+    with sessions_lock:
+        removed = session_id in sessions
+        sessions.pop(session_id, None)
+        persisted = load_sessions_from_disk()
+        if session_id in persisted:
+            removed = True
+            persisted.pop(session_id, None)
+            save_sessions_to_disk(persisted)
+        return removed
 
 
 def segment_and_normalize(image_array):
@@ -500,10 +600,10 @@ async def segment_ears(
 
         # Create session
         session_id = str(uuid.uuid4())
-        sessions[session_id] = {
+        set_session_entry(session_id, {
             "right_ear": right_annotated,
             "left_ear":  left_annotated,
-        }
+        })
         logger.info(f"Session {session_id}: segmented. Right blue pts: {len(right_pts)}, Left: {len(left_pts)}")
 
         return JSONResponse({
@@ -533,10 +633,10 @@ async def segment_ears(
 @app.post("/mirror-and-measure")
 async def mirror_and_measure(request: MirrorRequest):
     session_id = request.session_id
-    if session_id not in sessions:
+    session = get_session_entry(session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="Session not found. Upload images first.")
 
-    session   = sessions[session_id]
     right_ear = session["right_ear"]
     left_ear  = session["left_ear"]
 
@@ -606,9 +706,10 @@ async def mirror_and_measure(request: MirrorRequest):
     total_cm = sum(d["distance_cm"]     for d in distances)
 
     # Save in session for /validate-frame
-    sessions[session_id]["right_points"]  = right_points
-    sessions[session_id]["left_points"]   = left_points
-    sessions[session_id]["piercing_type"] = request.piercing_type
+    session["right_points"] = right_points
+    session["left_points"] = left_points
+    session["piercing_type"] = request.piercing_type
+    set_session_entry(session_id, session)
 
     logger.info(f"Session {session_id}: {len(right_points)} landmarks mirrored. Piercing: {request.piercing_type}")
 
@@ -644,10 +745,10 @@ async def validate_frame(
     session_id: str        = Form(...),
     ear_side:   str        = Form("left"),
 ):
-    if session_id not in sessions:
+    session = get_session_entry(session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    session = sessions[session_id]
     if "right_points" not in session:
         raise HTTPException(status_code=400,
                             detail="No digital points saved. Complete Mirror & Measure first.")
@@ -759,24 +860,23 @@ async def validate_frame(
 # ----------------------------------------------------------
 @app.get("/session/{session_id}")
 async def get_session(session_id: str):
-    if session_id in sessions:
+    if get_session_entry(session_id) is not None:
         return {"success": True, "session_id": session_id}
     raise HTTPException(status_code=404, detail="Session not found")
 
 @app.get("/session-points/{session_id}")
 async def get_session_points(session_id: str, side: str = "left"):
-    if session_id not in sessions:
+    session = get_session_entry(session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    
-    session = sessions[session_id]
+
     points = session.get("left_points" if side == "left" else "right_points", [])
     return {"success": True, "points": points}
 
 
 @app.delete("/session/{session_id}")
 async def delete_session(session_id: str):
-    if session_id in sessions:
-        sessions.pop(session_id)
+    if delete_session_entry(session_id):
         return {"success": True, "message": f"Session {session_id} deleted"}
     raise HTTPException(status_code=404, detail="Session not found")
 
@@ -830,7 +930,7 @@ async def start_live_validation_redirect(
     side: str = "left",
     preferred_mode: str = "mobile",
 ):
-    if session_id not in sessions:
+    if get_session_entry(session_id) is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
     launch_response = build_live_launch_response(request, session_id, side, preferred_mode)
