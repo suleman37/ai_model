@@ -1335,6 +1335,20 @@
             window.history.replaceState({}, document.title, url.toString());
         }
 
+        function updateLiveLaunchButtonState() {
+            const browserBtn = document.getElementById("openWebcamBtn");
+            if (!browserBtn) return;
+
+            if (pendingMobileLiveLaunch) {
+                browserBtn.innerHTML = "📱 Tap To Start Camera";
+                browserBtn.style.boxShadow = "0 0 0 3px rgba(59,130,246,0.25)";
+                return;
+            }
+
+            browserBtn.innerHTML = "🌐 Browser Webcam (Frame-by-Frame)";
+            browserBtn.style.boxShadow = "";
+        }
+
         async function restoreLiveSessionFromUrl() {
             const params = new URLSearchParams(window.location.search);
             const launchSessionId = params.get("session_id");
@@ -1356,8 +1370,14 @@
 
                 if (shouldAutoStart) {
                     clearAutoStartFlag();
-                    isHighSpeedMode = true;
-                    await openWebcam();
+                    if (isMobileClient()) {
+                        pendingMobileLiveLaunch = true;
+                        updateLiveLaunchButtonState();
+                        showToast("Tap 'Tap To Start Camera' once to allow browser camera permission.", "info");
+                    } else {
+                        isHighSpeedMode = true;
+                        await openWebcam();
+                    }
                 }
             } catch (err) {
                 showToast(err.message || "Unable to restore live validation session", "error");
@@ -1380,6 +1400,7 @@
         let rightBluePointsCount = 0;
         let isTriangleLocked = false;
         let isSnakebiteLocked = false;
+        let pendingMobileLiveLaunch = false;
 
         // --- Triangle Transformer State ---
         let triangleTransform = {
@@ -2417,7 +2438,35 @@
         async function openWebcam() {
             if (!sessionId) { showToast("No active session", "error"); return; }
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: "user" } });
+                pendingMobileLiveLaunch = false;
+                updateLiveLaunchButtonState();
+
+                const mobileConstraints = [
+                    { video: { width: 640, height: 480, facingMode: { ideal: "environment" } } },
+                    { video: { width: 640, height: 480, facingMode: { ideal: "user" } } },
+                    { video: { width: 640, height: 480 } },
+                ];
+                const desktopConstraints = [
+                    { video: { width: 640, height: 480, facingMode: "user" } },
+                    { video: { width: 640, height: 480 } },
+                ];
+                const candidates = isMobileClient() ? mobileConstraints : desktopConstraints;
+                let stream = null;
+                let lastError = null;
+
+                for (const constraints of candidates) {
+                    try {
+                        stream = await navigator.mediaDevices.getUserMedia(constraints);
+                        break;
+                    } catch (candidateError) {
+                        lastError = candidateError;
+                    }
+                }
+
+                if (!stream) {
+                    throw lastError || new Error("Unable to access camera");
+                }
+
                 webcamStream = stream;
                 document.getElementById("webcamVideo").srcObject = stream;
                 document.getElementById("webcamModal").classList.add("show");
