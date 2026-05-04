@@ -34,41 +34,11 @@
             padding: 10px 0 28px;
         }
 
-        .hero, .panel, .stats, .toast {
+        .panel, .toast {
             border: 1px solid var(--border);
             border-radius: 22px;
             background: rgba(11, 25, 43, 0.92);
             backdrop-filter: blur(14px);
-        }
-
-        .hero {
-            padding: 20px;
-            margin-bottom: 18px;
-        }
-
-        .eyebrow {
-            display: inline-flex;
-            padding: 8px 12px;
-            border-radius: 999px;
-            background: rgba(245, 158, 11, 0.14);
-            color: #ffd792;
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-        }
-
-        h1 {
-            margin: 14px 0 8px;
-            font-size: clamp(28px, 4vw, 44px);
-            line-height: 1.05;
-        }
-
-        .subcopy {
-            margin: 0;
-            color: var(--muted);
-            max-width: 700px;
-            line-height: 1.6;
         }
 
         .toolbar {
@@ -76,7 +46,7 @@
             flex-wrap: wrap;
             gap: 12px;
             align-items: center;
-            margin-top: 18px;
+            margin-bottom: 16px;
         }
 
         .chip {
@@ -107,17 +77,11 @@
             color: var(--text);
         }
 
-        .layout {
-            display: grid;
-            grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
-            gap: 18px;
-        }
-
         .panel {
             padding: 16px;
         }
 
-        .panel h2, .stats h3 {
+        .panel h2 {
             margin: 0 0 12px;
             font-size: 18px;
         }
@@ -129,14 +93,14 @@
         }
 
         .feed {
-            border-radius: 18px;
-            padding: 14px;
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.08);
+            padding: 0;
+            background: transparent;
+            border: 0;
         }
 
         .feed-label {
             margin-bottom: 12px;
+            padding: 0 2px;
             color: #bfd8f6;
             font-size: 13px;
             font-weight: 700;
@@ -150,9 +114,14 @@
             max-height: 620px;
             aspect-ratio: 1 / 1;
             object-fit: cover;
-            border-radius: 16px;
+            border-radius: 18px;
             background: #030812;
             border: 1px solid rgba(255,255,255,0.06);
+            display: block;
+        }
+
+        img[src=""] {
+            visibility: hidden;
         }
 
         canvas { display: none; }
@@ -168,23 +137,18 @@
             line-height: 1.5;
         }
 
-        .stats {
-            padding: 16px;
-            align-self: start;
-        }
-
         .side-toggle {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 10px;
-            margin-bottom: 14px;
+            width: min(280px, 100%);
         }
 
         .camera-toggle {
             display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 10px;
-            margin-bottom: 14px;
+            width: min(280px, 100%);
         }
 
         .side-btn {
@@ -202,26 +166,11 @@
             border-color: transparent;
         }
 
-        .metric {
-            padding: 12px 0;
-            border-top: 1px solid rgba(255,255,255,0.08);
-        }
-
-        .metric:first-of-type { border-top: 0; }
-        .metric-label {
-            color: var(--muted);
-            font-size: 13px;
-            margin-bottom: 5px;
-        }
-        .metric-value {
-            font-size: 17px;
-            font-weight: 700;
-        }
-
         .report {
             margin-top: 16px;
             display: grid;
             gap: 10px;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
         }
 
         .card {
@@ -257,9 +206,8 @@
         .toast.success { background: rgba(5, 150, 105, 0.96); }
 
         @media (max-width: 920px) {
-            .layout { grid-template-columns: 1fr; }
             .page { width: min(100vw, calc(100vw - 4px)); padding: 6px 0 18px; }
-            .hero, .panel, .stats { border-radius: 16px; }
+            .panel { border-radius: 16px; }
             video, img {
                 min-height: 470px;
                 max-height: 76vh;
@@ -269,66 +217,33 @@
 </head>
 <body>
     <main class="page">
-        <section class="hero">
-            <span class="eyebrow">Live Validation</span>
-            <h1>Dedicated Browser Scanner</h1>
-            <p class="subcopy">This page is only for live validation. It restores the requested session, opens the camera automatically, and runs the high-speed validation loop against the saved piercing points.</p>
+        <section class="panel">
             <div class="toolbar">
-                <div class="chip" id="sessionChip">Session: waiting...</div>
-                <div class="chip" id="modeChip">Mode: high-speed browser live</div>
-                <button class="button primary" id="retryBtn" type="button">Retry Camera</button>
-                <button class="button ghost" id="stopBtn" type="button">Stop Camera</button>
-            </div>
-        </section>
-
-        <section class="layout">
-            <section class="panel">
-                <h2>Live Feeds</h2>
-                <div class="feeds">
-                    <div class="feed">
-                        <div class="feed-label">Camera</div>
-                        <video id="webcamVideo" autoplay playsinline muted></video>
-                        <canvas id="captureCanvas"></canvas>
-                    </div>
-                    <div class="feed">
-                        <div class="feed-label">AI Annotated View</div>
-                        <img id="annotatedImg" alt="AI annotated frame">
-                    </div>
-                </div>
-                <div class="status" id="statusBox">Preparing live validation…</div>
-            </section>
-
-            <aside class="stats">
-                <h3>Session Control</h3>
                 <div class="side-toggle">
                     <button class="side-btn active" id="leftBtn" type="button">Left Ear</button>
                     <button class="side-btn" id="rightBtn" type="button">Right Ear</button>
                 </div>
                 <div class="camera-toggle">
-                    <button class="side-btn active" id="cameraAutoBtn" type="button">Auto Cam</button>
                     <button class="side-btn" id="cameraFrontBtn" type="button">Front Cam</button>
-                    <button class="side-btn" id="cameraBackBtn" type="button">Back Cam</button>
+                    <button class="side-btn active" id="cameraBackBtn" type="button">Back Cam</button>
                 </div>
+                <button class="button primary" id="retryBtn" type="button">Start Camera</button>
+                <button class="button ghost" id="stopBtn" type="button">Stop Camera</button>
+            </div>
 
-                <div class="metric">
-                    <div class="metric-label">Current Side</div>
-                    <div class="metric-value" id="sideValue">Left</div>
+            <div class="feeds">
+                <div class="feed">
+                    <div class="feed-label">Camera</div>
+                    <video id="webcamVideo" autoplay playsinline muted></video>
+                    <canvas id="captureCanvas"></canvas>
                 </div>
-                <div class="metric">
-                    <div class="metric-label">Camera Mode</div>
-                    <div class="metric-value" id="cameraValue">Auto</div>
+                <div class="feed">
+                    <div class="feed-label">AI Annotated View</div>
+                    <img id="annotatedImg" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt="">
                 </div>
-                <div class="metric">
-                    <div class="metric-label">Overall Accuracy</div>
-                    <div class="metric-value" id="accuracyValue">0%</div>
-                </div>
-                <div class="metric">
-                    <div class="metric-label">Marker Status</div>
-                    <div class="metric-value" id="markerValue">Waiting for scan</div>
-                </div>
-
-                <div class="report" id="improvementGrid"></div>
-            </aside>
+            </div>
+            <div class="status" id="statusBox">Preparing live validation…</div>
+            <div class="report" id="improvementGrid"></div>
         </section>
     </main>
 
@@ -336,6 +251,7 @@
 
     <script>
         const API_PORT = "8003";
+        const EMPTY_FRAME = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
         let cachedApiUrl = null;
         let sessionId = null;
         let currentEarSide = "left";
@@ -343,8 +259,7 @@
         let isWebcamRunning = false;
         let autoDetectTimer = null;
         let isAutoProcessing = false;
-        let autoStartAttempted = false;
-        let currentCameraFacing = "auto";
+        let currentCameraFacing = "environment";
 
         function getConfiguredApiUrl() {
             const params = new URLSearchParams(window.location.search);
@@ -431,21 +346,14 @@
             currentEarSide = side === "right" ? "right" : "left";
             document.getElementById("leftBtn").classList.toggle("active", currentEarSide === "left");
             document.getElementById("rightBtn").classList.toggle("active", currentEarSide === "right");
-            document.getElementById("sideValue").textContent = currentEarSide === "left" ? "Left" : "Right";
-            document.getElementById("annotatedImg").src = "";
-            document.getElementById("markerValue").textContent = "Waiting for scan";
-            document.getElementById("accuracyValue").textContent = "0%";
+            document.getElementById("annotatedImg").src = EMPTY_FRAME;
             document.getElementById("improvementGrid").innerHTML = "";
         }
 
         function setCameraFacing(mode) {
-            currentCameraFacing = ["user", "environment"].includes(mode) ? mode : "auto";
-            document.getElementById("cameraAutoBtn").classList.toggle("active", currentCameraFacing === "auto");
+            currentCameraFacing = ["user", "environment"].includes(mode) ? mode : "environment";
             document.getElementById("cameraFrontBtn").classList.toggle("active", currentCameraFacing === "user");
             document.getElementById("cameraBackBtn").classList.toggle("active", currentCameraFacing === "environment");
-            document.getElementById("cameraValue").textContent =
-                currentCameraFacing === "user" ? "Front" :
-                currentCameraFacing === "environment" ? "Back" : "Auto";
         }
 
         function startAutoDetectLoop() {
@@ -470,7 +378,7 @@
             }
             const video = document.getElementById("webcamVideo");
             if (video) video.srcObject = null;
-            setStatus("Camera stopped. Tap Retry Camera to start again.");
+            setStatus("Camera stopped. Tap Start Camera to continue.");
         }
 
         async function openWebcam() {
@@ -481,23 +389,11 @@
 
             try {
                 stopWebcam();
-                const autoMobileConstraints = [
-                    { video: { width: 640, height: 480, facingMode: { ideal: "environment" } } },
-                    { video: { width: 640, height: 480, facingMode: { ideal: "user" } } },
+                const candidates = [
+                    { video: { width: 640, height: 480, facingMode: { exact: currentCameraFacing } } },
+                    { video: { width: 640, height: 480, facingMode: { ideal: currentCameraFacing } } },
                     { video: { width: 640, height: 480 } },
                 ];
-                const autoDesktopConstraints = [
-                    { video: { width: 640, height: 480, facingMode: "user" } },
-                    { video: { width: 640, height: 480 } },
-                ];
-                const explicitConstraints = currentCameraFacing === "auto"
-                    ? null
-                    : [
-                        { video: { width: 640, height: 480, facingMode: { exact: currentCameraFacing } } },
-                        { video: { width: 640, height: 480, facingMode: { ideal: currentCameraFacing } } },
-                        { video: { width: 640, height: 480 } },
-                    ];
-                const candidates = explicitConstraints || (isMobileClient() ? autoMobileConstraints : autoDesktopConstraints);
                 let stream = null;
                 let lastError = null;
 
@@ -521,14 +417,12 @@
                 setStatus("Camera started. High-speed live validation is running.");
                 showToast("Live validation started.", "success");
             } catch (err) {
-                setStatus("Camera could not start automatically. Use Retry Camera and allow camera permission.");
+                setStatus("Camera could not start. Tap Start Camera and allow camera permission.");
                 showToast(err && err.message ? err.message : "Unable to start camera", "error");
             }
         }
 
         function showImprovementReport(result) {
-            document.getElementById("accuracyValue").textContent = `${result.summary.overall_accuracy}%`;
-            document.getElementById("markerValue").textContent = `${result.summary.detected_markers}/${result.summary.total_points} markers`;
             document.getElementById("improvementGrid").innerHTML = result.guidance.map(item => {
                 const errMm = item.error_cm != null ? `${(item.error_cm * 10).toFixed(1)} mm` : "Not found";
                 return `
@@ -616,20 +510,17 @@
             }
 
             sessionId = launchSessionId;
-            document.getElementById("sessionChip").textContent = `Session: ${sessionId}`;
             setEarSide(launchSide);
         }
 
         async function boot() {
             try {
                 await restoreFromLaunchUrl();
-                setStatus("Session restored. Starting live validation…");
-                if (!autoStartAttempted) {
-                    autoStartAttempted = true;
-                    setTimeout(() => {
-                        openWebcam().catch(() => null);
-                    }, 180);
-                }
+                setStatus("Session restored. Opening Back Camera…");
+                setCameraFacing("environment");
+                setTimeout(() => {
+                    openWebcam().catch(() => null);
+                }, 180);
             } catch (err) {
                 setStatus("Unable to restore the requested live-validation session.");
                 showToast(err && err.message ? err.message : "Unable to restore live session", "error");
@@ -638,10 +529,6 @@
 
         document.getElementById("leftBtn").addEventListener("click", () => setEarSide("left"));
         document.getElementById("rightBtn").addEventListener("click", () => setEarSide("right"));
-        document.getElementById("cameraAutoBtn").addEventListener("click", () => {
-            setCameraFacing("auto");
-            openWebcam().catch(() => null);
-        });
         document.getElementById("cameraFrontBtn").addEventListener("click", () => {
             setCameraFacing("user");
             openWebcam().catch(() => null);
@@ -654,6 +541,9 @@
             openWebcam().catch(() => null);
         });
         document.getElementById("stopBtn").addEventListener("click", stopWebcam);
+        document.getElementById("annotatedImg").addEventListener("error", (event) => {
+            event.currentTarget.src = EMPTY_FRAME;
+        });
 
         window.addEventListener("beforeunload", stopWebcam);
         window.addEventListener("load", () => {
