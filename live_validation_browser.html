@@ -194,6 +194,7 @@
             background: #57e0ee;
             box-shadow: 0 0 18px rgba(87, 224, 238, 0.95);
             animation: scannerSweep 2.4s ease-in-out infinite alternate;
+            will-change: top, opacity;
         }
 
         .camera-stage:not(.is-live) .scanner-line {
@@ -202,9 +203,9 @@
         }
 
         @keyframes scannerSweep {
-            0% { transform: translateY(0); opacity: 0.72; }
+            0% { top: 0; opacity: 0.72; }
             50% { opacity: 1; }
-            100% { transform: translateY(calc(100% + 260px)); opacity: 0.72; }
+            100% { top: calc(100% - 3px); opacity: 0.72; }
         }
 
         img[src=""] {
@@ -348,6 +349,7 @@
         let autoDetectTimer = null;
         let isAutoProcessing = false;
         let currentCameraFacing = "environment";
+        let lastAnnotatedAt = 0;
 
         function getConfiguredApiUrl() {
             const params = new URLSearchParams(window.location.search);
@@ -548,17 +550,6 @@
 
             if (!blob) return;
 
-            try {
-                const detectForm = new FormData();
-                detectForm.append("file", blob, "detect.jpg");
-                const detectResp = await apiFetch("/detect-ear", { method: "POST", body: detectForm });
-                if (!detectResp.ok) return;
-                const detectResult = await detectResp.json();
-                if (!detectResult.ear_detected) return;
-            } catch (_err) {
-                return;
-            }
-
             isAutoProcessing = true;
 
             try {
@@ -577,7 +568,10 @@
                 if (result.success && result.ear_detected) {
                     document.getElementById("annotatedImg").src = `data:image/png;base64,${result.annotated_image}`;
                     showImprovementReport(result);
+                    lastAnnotatedAt = Date.now();
                     setStatus(`Scanning ${currentEarSide} ear. ${result.summary.status} result is live.`);
+                } else if (Date.now() - lastAnnotatedAt > 800) {
+                    setStatus(`Scanning ${currentEarSide} ear. Bring the ear inside the scanner frame.`);
                 }
             } catch (_err) {
                 setStatus("Live validation is waiting for the next stable frame.");
