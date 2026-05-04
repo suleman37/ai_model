@@ -113,6 +113,117 @@
             display: block;
         }
 
+        .camera-stage {
+            position: relative;
+            width: 100%;
+            overflow: hidden;
+            border-radius: 18px;
+        }
+
+        .camera-stage video {
+            border-radius: 18px;
+        }
+
+        .scanner-overlay {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }
+
+        .overlay-block {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.55);
+        }
+
+        .overlay-top {
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 19%;
+        }
+
+        .overlay-bottom {
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 17%;
+        }
+
+        .overlay-left {
+            top: 19%;
+            bottom: 17%;
+            left: 0;
+            width: 14%;
+        }
+
+        .overlay-right {
+            top: 19%;
+            bottom: 17%;
+            right: 0;
+            width: 14%;
+        }
+
+        .guide-oval {
+            position: absolute;
+            top: 19%;
+            left: 14%;
+            width: 72%;
+            height: 64%;
+            border: 2px dashed #57e0ee;
+            border-radius: 999px;
+            box-shadow: 0 0 0 1px rgba(87, 224, 238, 0.16);
+        }
+
+        .scanner-window {
+            position: absolute;
+            top: 19%;
+            left: 14%;
+            width: 72%;
+            height: 64%;
+            overflow: hidden;
+            border-radius: 999px;
+        }
+
+        .scanner-line {
+            position: absolute;
+            left: 10px;
+            right: 10px;
+            top: 8%;
+            height: 3px;
+            border-radius: 999px;
+            background: #57e0ee;
+            box-shadow: 0 0 18px rgba(87, 224, 238, 0.95);
+            animation: scannerSweep 2.1s linear infinite;
+        }
+
+        .scanner-copy {
+            position: absolute;
+            left: 50%;
+            bottom: 8%;
+            transform: translateX(-50%);
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: rgba(5, 15, 31, 0.72);
+            border: 1px solid rgba(87, 224, 238, 0.26);
+            color: #d8f9ff;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            backdrop-filter: blur(10px);
+        }
+
+        .camera-stage:not(.is-live) .scanner-line {
+            animation-play-state: paused;
+            opacity: 0.45;
+        }
+
+        @keyframes scannerSweep {
+            0% { transform: translateY(0); opacity: 0.72; }
+            50% { opacity: 1; }
+            100% { transform: translateY(calc(100% + 210px)); opacity: 0.72; }
+        }
+
         img[src=""] {
             visibility: hidden;
         }
@@ -208,7 +319,20 @@
             <div class="feeds">
                 <div class="feed">
                     <div class="feed-label">Camera</div>
-                    <video id="webcamVideo" autoplay playsinline muted></video>
+                    <div class="camera-stage" id="cameraStage">
+                        <video id="webcamVideo" autoplay playsinline muted></video>
+                        <div class="scanner-overlay">
+                            <div class="overlay-block overlay-top"></div>
+                            <div class="overlay-block overlay-bottom"></div>
+                            <div class="overlay-block overlay-left"></div>
+                            <div class="overlay-block overlay-right"></div>
+                            <div class="guide-oval"></div>
+                            <div class="scanner-window">
+                                <div class="scanner-line"></div>
+                            </div>
+                            <div class="scanner-copy">Align Ear Inside The Guide</div>
+                        </div>
+                    </div>
                     <canvas id="captureCanvas"></canvas>
                 </div>
                 <div class="feed">
@@ -359,7 +483,9 @@
                 webcamStream = null;
             }
             const video = document.getElementById("webcamVideo");
+            const cameraStage = document.getElementById("cameraStage");
             if (video) video.srcObject = null;
+            if (cameraStage) cameraStage.classList.remove("is-live");
             setStatus("Camera stopped. Tap Start Camera to continue.");
         }
 
@@ -394,11 +520,13 @@
 
                 webcamStream = stream;
                 document.getElementById("webcamVideo").srcObject = stream;
+                document.getElementById("cameraStage").classList.add("is-live");
                 isWebcamRunning = true;
                 startAutoDetectLoop();
                 setStatus("Camera started. High-speed live validation is running.");
                 showToast("Live validation started.", "success");
             } catch (err) {
+                document.getElementById("cameraStage").classList.remove("is-live");
                 setStatus("Camera could not start. Tap Start Camera and allow camera permission.");
                 showToast(err && err.message ? err.message : "Unable to start camera", "error");
             }
